@@ -53,7 +53,7 @@ interface Creature extends CreatureShape {
   fleeX: number;
   fleeY: number;
   fleeUntil: number;
-  /** 这次位移是保存推开（而非换行惊散）：推开期间去掉游速里朝向卡片中心的分量，迎面游来的也会被推走 */
+  /** 这次位移是保存推开（而非换行惊散）：推开期间去掉游速里朝卡片内的分量（沿最近边界点的外法线），迎面游来的也会被推走 */
   pushed: boolean;
   /** 上一帧实际画出的范围（px），用于点击命中 */
   box: { x0: number; y0: number; x1: number; y1: number } | null;
@@ -77,21 +77,21 @@ interface Glow {
 
 /**
  * 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板，
- * reach：可见轮廓主体离中心的最远距离（体长倍数），跟随卡片时据此留安全边距。
- * 水母伞盖前缘约 1.8 倍伞径、触手末端约 2.3 倍但已淡到几乎看不见，取 1.8；鲨/鲸鲨身体半长 0.5；
- * 蝠鲼鞭尾约 1 倍但很细，取 0.7；小鱼群散布半径约 3.2（不参与跟随）。
+ * reach：绘制轮廓离生物中心（x, y）的最远距离上界（体长倍数，含 creatures.ts 里的蒙版平移和摆动），跟随卡片时据此留安全边距。
+ * 水母整体前移 (3.6 - 伞宽) / 2 倍伞径：伞盖前缘最远 2.35，触手末端连同摆动和线宽最远约 2.5，取 2.6；
+ * 鲨/鲸鲨身体半长 0.5；蝠鲼整体前移 0.45：头鳍尖约 1.05、翼尖约 1.04，加线宽取 1.12；小鱼群散布半径约 3.2（不参与跟随）。
  */
 const SPECIES: Record<
   Kind,
   { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; palette: RGB[] }
 > = {
   // 冰青、淡紫
-  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 1.8, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
   // 米色、蓝灰、暖金
   shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], reach: 0.5, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
   // 暖金、米色、蓝灰
   whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], reach: 0.5, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
-  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 0.7, palette: [[150, 170, 205], [180, 172, 210]] },
+  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
   fish: { size: [4, 6], speed: [2, 2.8], turn: 1.2, beat: [5.5, 6.5], reach: 3.2, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
 };
 
@@ -154,7 +154,7 @@ export class Ocean {
   private nextFrame = 0;
   private t = 0;
   private paused = false;
-  /** 输入卡在视图里的矩形（px），由 react() 传入 */
+  /** 输入卡在视图里的矩形（px），由 react() 和 resize() 传入 */
   private card = { x: 0, y: 0, w: 0, h: 0 };
   /** 打字时靠近卡片的那只生物，跟随到 followUntil 为止 */
   private follower: Creature | null = null;
@@ -178,9 +178,10 @@ export class Ocean {
     this.reduced.addEventListener('change', this.onReducedChange);
   }
 
-  resize(w: number, h: number): void {
+  resize(w: number, h: number, card: { x: number; y: number; w: number; h: number }): void {
     this.w = w;
     this.h = h;
+    this.card = card;
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
@@ -255,8 +256,9 @@ export class Ocean {
     if (event === 'save') this.followUntil = 0;
     for (const c of this.creatures) {
       if (event === 'break' && c.kind !== 'fish') continue;
-      // 背离卡片中心，略加随机偏角让鱼群散开
-      const a = Math.atan2(c.y - cy, c.x - cx) + rand(-0.3, 0.3);
+      // 换行背离卡片中心；保存沿卡片上离它最近的边界点的外法线推开。略加随机偏角让鱼群散开
+      const n = event === 'save' ? this.normal(c.x, c.y) : { x: c.x - cx, y: c.y - cy };
+      const a = Math.atan2(n.y, n.x) + rand(-0.3, 0.3);
       // 小鱼群按自身游速的 2 倍冲出去；水波推力按格子尺寸给，大小生物被推得一样远
       const push = event === 'break' ? c.speed * c.size * this.cell * 2 : this.cell * 12;
       c.fleeX = Math.cos(a) * push;
@@ -267,6 +269,23 @@ export class Ocean {
       c.tx = c.x + Math.cos(a) * this.w * 0.5;
       c.ty = c.y + Math.sin(a) * this.h * 0.5;
     }
+  }
+
+  /** 卡片矩形上离 (x, y) 最近的边界点的外法线（单位向量）；已在卡片内时取最近那条边的外法线 */
+  private normal(x: number, y: number): { x: number; y: number } {
+    const r = this.card;
+    const ox = x - Math.max(r.x, Math.min(r.x + r.w, x));
+    const oy = y - Math.max(r.y, Math.min(r.y + r.h, y));
+    const d = Math.hypot(ox, oy);
+    if (d > 0) return { x: ox / d, y: oy / d };
+    const left = x - r.x;
+    const right = r.x + r.w - x;
+    const top = y - r.y;
+    const bottom = r.y + r.h - y;
+    const min = Math.min(left, right, top, bottom);
+    if (min === left) return { x: -1, y: 0 };
+    if (min === right) return { x: 1, y: 0 };
+    return min === top ? { x: 0, y: -1 } : { x: 0, y: 1 };
   }
 
   /** 视图可见且未暂停时开始循环；减少动态效果时只画一帧静态画面 */
@@ -417,14 +436,12 @@ export class Ocean {
     let bx = Math.cos(c.heading) * v * pace * k;
     let by = Math.sin(c.heading) * v * pace * k;
     if (c.pushed && flee > 0) {
-      // 保存推开：去掉游速里朝向卡片中心的分量，迎面游来的生物不会压过推力逆流进卡
-      const ux = c.x - r.x - r.w / 2;
-      const uy = c.y - r.y - r.h / 2;
-      const len = Math.hypot(ux, uy);
-      const out = len > 0 ? (bx * ux + by * uy) / len : 0;
+      // 保存推开：去掉游速里沿最近边界点外法线朝内的分量，迎面或沿边切向游来的生物都不会越过卡片边
+      const n = this.normal(c.x, c.y);
+      const out = bx * n.x + by * n.y;
       if (out < 0) {
-        bx -= (out * ux) / len;
-        by -= (out * uy) / len;
+        bx -= out * n.x;
+        by -= out * n.y;
       }
     }
     let dx = (bx + c.fleeX * flee) * dt;

@@ -225,7 +225,7 @@ export class AbyssalJotView extends ItemView {
 
     const observer = new ResizeObserver(() => {
       const { width, height } = root.getBoundingClientRect();
-      this.ocean.resize(width, height);
+      this.ocean.resize(width, height, this.cardRect());
       this.effects.resize(width, height);
     });
     observer.observe(root);
