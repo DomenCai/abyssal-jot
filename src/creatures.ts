@@ -168,10 +168,10 @@ export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   const hammer = c.seed < 0.5;
   const N = 16;
   const amp = L * 0.08;
-  // 体宽轮廓：双髻鲨颈部窄、胸部最宽；尖吻鲨从吻尖迅速变宽，体型更粗壮
+  // 体宽轮廓（俯视最宽处约为体长的 0.2，与真实鲨鱼相近）：双髻鲨颈部窄、胸部最宽；尖吻鲨从吻尖迅速变宽，体型更粗壮
   const width = hammer
-    ? (s: number) => L * (s < 0.3 ? 0.06 + (s / 0.3) * 0.055 : 0.115 * Math.pow(1 - (s - 0.3) / 0.7, 1.3) + 0.012)
-    : (s: number) => L * (s < 0.3 ? 0.16 * Math.pow(s / 0.3, 0.6) + 0.01 : 0.16 * Math.pow(1 - (s - 0.3) / 0.7, 1.2) + 0.012);
+    ? (s: number) => L * (s < 0.3 ? 0.08 + (s / 0.3) * 0.1 : 0.16 * Math.pow(1 - (s - 0.3) / 0.7, 1.15) + 0.02)
+    : (s: number) => L * (s < 0.3 ? 0.21 * Math.pow(s / 0.3, 0.55) + 0.02 : 0.21 * Math.pow(1 - (s - 0.3) / 0.7, 1.1) + 0.02);
   const pts: P[] = [];
   const widths: number[] = [];
   for (let i = 0; i <= N; i++) {
@@ -183,24 +183,26 @@ export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
 
   // 鳍比身体暗，先画，被身体盖住根部
   const fin = (i: number, back: number, out: number, level: number) =>
-    finPair(m, pts[i], ts[i], L, back, out * L, L * 0.06, shade(hue, level));
-  if (hammer) fin(5, 0.16, 0.17, 0.34);
-  else fin(5, 0.2, 0.25, 0.36);
-  fin(11, 0.06, 0.06, 0.28);
+    finPair(m, pts[i], ts[i], L, back, out * L, L * 0.1, shade(hue, level));
+  if (hammer) fin(5, 0.18, 0.24, 0.34);
+  else fin(5, 0.22, 0.3, 0.36);
+  fin(11, 0.07, 0.09, 0.28);
 
-  // 叉形尾鳍：上叶长、下叶短
+  // 叉形尾鳍：上叶长、下叶短，画成有宽度的三角叶片（线条放大后会显得过细）
   const tail = pts[N];
   const tt = ts[N];
-  m.strokeStyle = shade(hue, 0.42);
-  m.lineWidth = 1;
+  const base = L * 0.035;
+  m.fillStyle = shade(hue, 0.42);
   for (const [back, out] of [
-    [0.13, 0.09],
-    [0.08, -0.05],
+    [0.2, 0.14],
+    [0.12, -0.09],
   ]) {
     m.beginPath();
-    m.moveTo(tail.x, tail.y);
+    m.moveTo(tail.x + tt.x * base - tt.y * base * Math.sign(out), tail.y + tt.y * base + tt.x * base * Math.sign(out));
     m.lineTo(tail.x - tt.x * back * L - tt.y * out * L, tail.y - tt.y * back * L + tt.x * out * L);
-    m.stroke();
+    m.lineTo(tail.x - tt.x * base, tail.y - tt.y * base);
+    m.closePath();
+    m.fill();
   }
 
   layeredBody(m, pts, widths, hue);
@@ -222,7 +224,7 @@ export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   m.fillStyle = shade(hue, 1);
   for (const side of [-1, 1]) {
     m.beginPath();
-    m.arc(head.x - ht.y * side * L * 0.15, head.y + ht.x * side * L * 0.15, 0.7, 0, Math.PI * 2);
+    m.arc(head.x - ht.y * side * L * 0.15, head.y + ht.x * side * L * 0.15, Math.max(0.7, L * 0.012), 0, Math.PI * 2);
     m.fill();
   }
 }
