@@ -97,18 +97,18 @@ export function drawJelly(m: CanvasRenderingContext2D, c: CreatureShape): void {
   const len = s * 3.6;
   m.translate((len - bw) / 2, 0);
 
-  // 触手：从伞缘垂下，越往末端越暗
+  // 触手：从伞缘垂下，越往末端越暗；线宽和摆幅随尺寸缩放，放大后不断续
   const tentacles = 8;
-  m.lineWidth = 0.6;
+  m.lineWidth = Math.max(0.65, s * 0.065);
   for (let i = 0; i < tentacles; i++) {
     const y0 = -bh * 0.9 + (i * 1.8 * bh) / (tentacles - 1);
     const tl = len * (0.75 + 0.25 * Math.abs(Math.sin(i * 2.1 + c.seed * 9)));
     const pts: P[] = [];
     for (let k = 0; k <= 14; k++) {
       const f = k / 14;
-      pts.push({ x: -tl * f, y: y0 * (1 - 0.25 * f) + Math.sin(c.phase - k * 0.5 + i * 1.3) * (0.3 + f * 2.2) });
+      pts.push({ x: -tl * f, y: y0 * (1 - 0.25 * f) + Math.sin(c.phase - k * 0.48 + i * 1.3) * s * (0.04 + f * 0.22) });
     }
-    fadingLine(m, pts, hue, 0.62, 0.25);
+    fadingLine(m, pts, hue, 0.65, 0.25);
   }
   // 口腕：两条粗丝带，中心一线更亮
   for (const side of [-1, 1]) {
@@ -116,14 +116,14 @@ export function drawJelly(m: CanvasRenderingContext2D, c: CreatureShape): void {
       m.beginPath();
       for (let k = 0; k <= 10; k++) {
         const f = k / 10;
-        m.lineTo(bw * 0.15 - len * 0.62 * f, side * bh * 0.14 * (1 - f * 0.5) + Math.sin(c.phase * 0.8 - k * 0.5 + side) * f * 1.8);
+        m.lineTo(bw * 0.15 - len * 0.62 * f, side * bh * 0.14 * (1 - f * 0.5) + Math.sin(c.phase * 0.8 - k * 0.5 + side) * f * s * 0.2);
       }
       m.stroke();
     };
-    m.lineWidth = 2.2;
+    m.lineWidth = Math.max(2.0, s * 0.24);
     m.strokeStyle = shade(hue, 0.42);
     arm();
-    m.lineWidth = 0.9;
+    m.lineWidth = Math.max(0.9, s * 0.1);
     m.strokeStyle = shade(hue, 0.82);
     arm();
   }
@@ -142,13 +142,13 @@ export function drawJelly(m: CanvasRenderingContext2D, c: CreatureShape): void {
   }
   // 伞顶弧形高光
   m.strokeStyle = shade(hue, 0.95);
-  m.lineWidth = 1.1;
+  m.lineWidth = Math.max(1.1, s * 0.11);
   m.beginPath();
   m.ellipse(0, 0, bw * 0.93, bh * 0.93, 0, -0.9, 0.9);
   m.stroke();
   // 伞缘：侧视为一条微微起伏的亮线
   m.strokeStyle = shade(hue, 0.8);
-  m.lineWidth = 1;
+  m.lineWidth = Math.max(1.0, s * 0.095);
   m.beginPath();
   for (let k = 0; k <= 12; k++) {
     const f = k / 12;
@@ -204,13 +204,15 @@ export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   // 体宽：最宽处占体长 W，位于 sm；吻部圆钝指数 p（越小越钝），向尾收细指数 q（越小后半身越饱满）；尾柄宽为最宽处的 0.14
   const [W, sm, p, q] = leopard ? [0.25, 0.3, 0.4, 1.1] : [0.21, 0.32, 0.5, 1.2];
   const width = (s: number) => L * W * (s < sm ? Math.pow(s / sm, p) : 0.14 + 0.86 * Math.pow(1 - (s - sm) / (1 - sm), q));
-  const amp = L * 0.06;
+  const amp = L * 0.055;
   const pts: P[] = [];
   const widths: number[] = [];
   for (let i = 0; i <= N; i++) {
     const s = i / N;
-    // 行波：头部轻微摆头、振幅向尾部递增；弯曲以胸鳍附近为支点，头尾都偏向转弯内侧
-    pts.push({ x: L * (0.5 - s), y: amp * (0.12 + Math.pow(s, 1.5)) * Math.sin(c.phase - s * 5) + c.bend * L * 0.32 * (s - 0.3) ** 2 });
+    // 鲨鱼为鲹科游动：前半身稳重少晃、行波主要在后半身放大（相位跨度约半个波，不呈蛇形）；转弯弯曲收敛在自然弧度内
+    const wave = amp * (0.04 + 0.96 * Math.pow(s, 2)) * Math.sin(c.phase - s * 3.1);
+    const curve = c.bend * L * 0.17 * (s - 0.3) ** 2;
+    pts.push({ x: L * (0.5 - s), y: wave + curve });
     widths.push(width(s));
   }
   const ts = tangents(pts);
@@ -308,14 +310,17 @@ export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   }
 }
 
-/** 鲸鲨（俯视）：宽扁方头 + 横向宽嘴 + 粗壮身体 + 大胸鳍 + 新月尾鳍 + 背部浅色斑点 */
+/** 鲸鲨（俯视）：宽扁方头 + 横向宽嘴 + 粗壮身体 + 大胸鳍 + 实心新月尾鳍 + 背部浅色斑点 */
 export function drawWhaleShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   const L = c.size;
   const hue = c.hue;
-  const N = 16;
-  const amp = L * 0.05;
-  // 脊柱：s 为 0(头)~1(尾)，摆幅向尾部递增
-  const spine = (s: number): P => ({ x: L * (0.5 - s), y: amp * Math.pow(s, 1.5) * Math.sin(c.phase - s * 4) });
+  const N = 24;
+  const amp = L * 0.045;
+  // 脊柱：前半身稳重，摆幅向尾部递增，并随转弯温和弯曲
+  const spine = (s: number): P => ({
+    x: L * (0.5 - s),
+    y: amp * (0.03 + 0.97 * Math.pow(s, 1.9)) * Math.sin(c.phase - s * 3) + c.bend * L * 0.14 * (s - 0.3) ** 2,
+  });
   // 朝向头部的单位切向量
   const tangent = (s: number): P => {
     const a = spine(Math.max(0, s - 0.02));
@@ -324,33 +329,34 @@ export function drawWhaleShark(m: CanvasRenderingContext2D, c: CreatureShape): v
     return { x: (a.x - b.x) / d, y: (a.y - b.y) / d };
   };
   // 体宽：头部宽而平（分层身体在 s=0 处平直收口，即方头），胸部最宽，向尾柄收细
-  const width = (s: number) => L * (0.035 + 0.13 * Math.pow(1 - s, 0.9));
+  const width = (s: number) => L * (0.035 + 0.135 * Math.pow(1 - s, 0.9));
 
-  // 胸鳍：一对大三角鳍；背鳍/腹鳍较小
+  // 胸鳍：一对大三角鳍；腹鳍较小
   const fin = (s: number, back: number, out: number, level: number) =>
     finPair(m, spine(s), tangent(s), L, back, out * L + width(s) / 2, L * 0.1, shade(hue, level));
-  fin(0.24, 0.2, 0.2, 0.32);
-  fin(0.62, 0.07, 0.07, 0.28);
+  fin(0.24, 0.2, 0.2, 0.34);
+  fin(0.62, 0.07, 0.07, 0.3);
 
-  // 月牙形尾鳍：上叶长、下叶短，向后弯曲
+  // 实心月牙形尾鳍：上叶长、下叶短，与鲨鱼质感一致
   const tail = spine(1);
   const tt = tangent(1);
-  m.strokeStyle = shade(hue, 0.45);
-  m.lineWidth = 1.3;
+  const tl = (a: number, s: number) => local(tail, tt, a * L, s * L);
+  m.fillStyle = shade(hue, 0.42);
   for (const [back, out] of [
-    [0.12, 0.14],
-    [0.09, -0.1],
+    [0.16, 0.12],
+    [0.1, -0.085],
   ]) {
-    // 控制点靠近尾柄侧，使叶片向后凸出成新月形
+    const base = tl(0.05, 0);
+    const lead = tl(-back * 0.2, out * 0.85);
+    const tip = tl(-back, out);
+    const trail = tl(-back * 0.45, out * 0.4);
+    const fork = tl(-0.045, 0);
     m.beginPath();
-    m.moveTo(tail.x, tail.y);
-    m.quadraticCurveTo(
-      tail.x - tt.x * back * L * 0.2 - tt.y * out * L * 0.8,
-      tail.y - tt.y * back * L * 0.2 + tt.x * out * L * 0.8,
-      tail.x - tt.x * back * L - tt.y * out * L,
-      tail.y - tt.y * back * L + tt.x * out * L,
-    );
-    m.stroke();
+    m.moveTo(base.x, base.y);
+    m.quadraticCurveTo(lead.x, lead.y, tip.x, tip.y);
+    m.quadraticCurveTo(trail.x, trail.y, fork.x, fork.y);
+    m.closePath();
+    m.fill();
   }
 
   // 身体整体压暗一档，让背部斑点跳出来
@@ -372,7 +378,7 @@ export function drawWhaleShark(m: CanvasRenderingContext2D, c: CreatureShape): v
   const ht = tangent(0.02);
   const hw = width(0.02) * 0.4;
   m.strokeStyle = shade(hue, 0.12);
-  m.lineWidth = 0.8;
+  m.lineWidth = Math.max(0.8, L * 0.016);
   m.beginPath();
   m.moveTo(h.x - ht.y * hw, h.y + ht.x * hw);
   m.lineTo(h.x + ht.y * hw, h.y - ht.x * hw);
@@ -380,6 +386,7 @@ export function drawWhaleShark(m: CanvasRenderingContext2D, c: CreatureShape): v
 
   // 浅色斑点：沿脊柱的几列规则排布，位置跟随脊柱摆动
   const offsets = [-0.36, -0.12, 0.12, 0.36];
+  const dotR = Math.max(0.55, L * 0.013);
   m.fillStyle = shade(hue, 1);
   for (let col = 0; col < 9; col++) {
     const s = 0.14 + col * 0.075;
@@ -391,7 +398,7 @@ export function drawWhaleShark(m: CanvasRenderingContext2D, c: CreatureShape): v
       const off = (offsets[k] + (col % 2 ? 0.12 : 0)) * w;
       if (Math.abs(off) > w * 0.42) continue;
       m.beginPath();
-      m.arc(p.x - t.y * off, p.y + t.x * off, 0.55, 0, Math.PI * 2);
+      m.arc(p.x - t.y * off, p.y + t.x * off, dotR, 0, Math.PI * 2);
       m.fill();
     }
   }
@@ -405,18 +412,21 @@ export function drawRay(m: CanvasRenderingContext2D, c: CreatureShape): void {
   m.translate(L * 0.45, 0);
   const tail0 = -L * 0.42;
 
-  // 鞭尾：随相位缓慢甩动，末端更暗
+  // 鞭尾：随相位缓慢甩动并顺着转弯弯曲，末端更暗
   const tail: P[] = [];
   for (let k = 0; k <= 12; k++) {
     const f = k / 12;
-    tail.push({ x: tail0 - L * f, y: Math.sin(c.phase * 0.7 - f * 3.5) * f * L * 0.07 });
+    tail.push({
+      x: tail0 - L * f,
+      y: Math.sin(c.phase * 0.7 - f * 3.2) * f * L * 0.065 + c.bend * L * 0.16 * f * f,
+    });
   }
-  m.lineWidth = 0.7;
+  m.lineWidth = Math.max(0.7, L * 0.03);
   fadingLine(m, tail, hue, 0.5, 0.22);
 
   // 头鳍：吻端一对向内卷的短角
   m.strokeStyle = shade(hue, 0.45);
-  m.lineWidth = 1;
+  m.lineWidth = Math.max(0.9, L * 0.04);
   for (const side of [-1, 1]) {
     m.beginPath();
     m.moveTo(L * 0.4, side * L * 0.09);
@@ -462,87 +472,4 @@ function mulberry32(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** 一条侧视小鱼，单位坐标（体长 = 1，朝 +x）：纺锤身 + 背鳍 + 腹鳍 + 叉尾 + 银色侧线 + 眼睛。
- *  侧视看不到左右摆尾，用尾鳍前后伸缩表现拍水 */
-function drawFish(m: CanvasRenderingContext2D, hue: RGB, phase: number): void {
-  const k = 0.75 + 0.25 * Math.cos(phase);
-  const lift = Math.sin(phase) * 0.03;
-  // 鳍和尾只比身体略暗：格子化后剪影靠它们撑起来，太暗会被吃掉
-  m.fillStyle = shade(hue, 0.6);
-  m.beginPath();
-  m.moveTo(-0.28, -0.05);
-  m.lineTo(-0.32 - 0.2 * k, -0.24 + lift);
-  m.lineTo(-0.36 - 0.06 * k, -0.2 + lift);
-  m.lineTo(-0.34 - 0.04 * k, lift * 0.5);
-  m.lineTo(-0.36 - 0.06 * k, 0.2 + lift);
-  m.lineTo(-0.32 - 0.2 * k, 0.24 + lift);
-  m.lineTo(-0.28, 0.05);
-  m.closePath();
-  m.fill();
-  // 背鳍、腹鳍
-  m.beginPath();
-  m.moveTo(0.12, -0.13);
-  m.lineTo(-0.06, -0.27);
-  m.lineTo(-0.13, -0.1);
-  m.closePath();
-  m.fill();
-  m.fillStyle = shade(hue, 0.5);
-  m.beginPath();
-  m.moveTo(0.02, 0.11);
-  m.lineTo(-0.08, 0.23);
-  m.lineTo(-0.15, 0.1);
-  m.closePath();
-  m.fill();
-  // 身体：背部弧线比腹部更隆起
-  m.fillStyle = shade(hue, 0.7);
-  m.beginPath();
-  m.moveTo(0.5, 0.01);
-  m.bezierCurveTo(0.42, -0.14, 0.12, -0.18, -0.05, -0.15);
-  m.bezierCurveTo(-0.18, -0.12, -0.26, -0.06, -0.32, -0.04);
-  m.lineTo(-0.32, 0.04);
-  m.bezierCurveTo(-0.24, 0.07, -0.15, 0.12, -0.02, 0.13);
-  m.bezierCurveTo(0.14, 0.14, 0.42, 0.11, 0.5, 0.01);
-  m.fill();
-  // 银色侧线
-  m.fillStyle = shade(hue, 0.95);
-  m.beginPath();
-  m.ellipse(0.02, -0.01, 0.34, 0.045, 0, 0, Math.PI * 2);
-  m.fill();
-  // 鳃盖弧线、眼睛
-  m.strokeStyle = shade(hue, 0.3);
-  m.lineWidth = 0.05;
-  m.beginPath();
-  m.arc(0.2, 0, 0.12, -0.9, 0.9);
-  m.stroke();
-  m.fillStyle = shade(hue, 0.08);
-  m.beginPath();
-  m.arc(0.35, -0.04, 0.055, 0, Math.PI * 2);
-  m.fill();
-}
-
-/** 小鱼群：3~5 条侧视小鱼松散同游，整体朝 +x，队形仅由 seed 决定。
- *  侧视的鱼不能肚皮朝上游：朝向偏左（蒙版变换的 a = cos(朝向) < 0）时上下翻转，保持背鳍朝上 */
-export function drawFishSchool(m: CanvasRenderingContext2D, c: CreatureShape): void {
-  if (m.getTransform().a < 0) m.scale(1, -1);
-  const rnd = mulberry32(c.seed);
-  const n = 3 + Math.floor(rnd() * 3);
-  for (let i = 0; i < n; i++) {
-    // 队形：横向 2.2 倍体长、纵向 1.3 倍体长的椭圆内散布，加一点随相位的漂移和各自的俯仰（俯仰收小，侧视轮廓不歪）
-    const ang = rnd() * Math.PI * 2;
-    const r = Math.sqrt(rnd());
-    const len = c.size * (0.8 + rnd() * 0.35);
-    const ph = rnd() * Math.PI * 2;
-    const tilt = (rnd() - 0.5) * 0.16;
-    m.save();
-    m.translate(
-      Math.cos(ang) * r * c.size * 2.2 + Math.sin(c.phase * 0.3 + ph) * c.size * 0.15,
-      Math.sin(ang) * r * c.size * 1.3 + Math.cos(c.phase * 0.25 + ph * 1.7) * c.size * 0.12,
-    );
-    m.rotate(tilt + Math.sin(c.phase * 0.2 + ph) * 0.06);
-    m.scale(len, len);
-    drawFish(m, c.hue, c.phase + ph);
-    m.restore();
-  }
 }

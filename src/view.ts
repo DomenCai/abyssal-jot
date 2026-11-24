@@ -285,8 +285,8 @@ export class AbyssalJotView extends ItemView {
   private onInput(e: InputEvent): void {
     this.saveDraft();
     this.updateSend();
-    // 背景生物回应输入，不受输入特效预设影响
-    this.ocean.react(e.inputType === 'insertLineBreak' ? 'break' : 'type', this.cardRect());
+    // 背景生物回应输入，不受输入特效预设影响；单按回车不触发跟随
+    if (e.inputType !== 'insertLineBreak') this.ocean.react('type', this.cardRect());
     const caret = this.ta.selectionStart;
     if (e.isComposing) {
       this.effects.compose(this.compStart, caret);

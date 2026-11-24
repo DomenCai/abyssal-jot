@@ -1,20 +1,20 @@
 /**
- * 背景深海：程序化生物（水母、鲨、鲸鲨、蝠鲼、小鱼群）+ ASCII 暗流微粒。
+ * 背景深海：程序化生物（水母、鲨、鲸鲨、蝠鲼）+ ASCII 暗流微粒。
  * 每个生物先画到一张带色光照的低分辨率蒙版（1 像素 = 1 格），蒙版双线性缩小后垫在下层当柔光，
  * 再逐格采样成「实心底色 + 格内字符」：暗部深底亮字，亮部浅底深字。
  */
-import { CreatureShape, RGB, drawFishSchool, drawJelly, drawRay, drawShark, drawWhaleShark } from './creatures';
+import { CreatureShape, RGB, drawJelly, drawRay, drawShark, drawWhaleShark } from './creatures';
 
 /** 由暗到亮的字符梯度 */
 const GLYPHS = ' .:-otX%8$';
 /** 蒙版边长（格），需容纳最大的生物 */
-const MASK = 176;
+const MASK = 144;
 /** 点中生物后停顿发光的时长（秒） */
 const GREET_S = 1.2;
 /** 停止打字后，跟随卡片的生物再停留多久才恢复漫游（秒） */
 const FOLLOW_S = 2.5;
-/** 换行惊散、保存水波推开的持续时长（秒），推力线性衰减到 0 */
-const FLEE_S = 1.2;
+/** 保存水波触发转向加速游离的持续时长（秒） */
+const BOOST_S = 1.4;
 /** 暗部底色偏向的冷青蓝 */
 const COLD: RGB = [20, 35, 58];
 /** 亮部反相时的深色字 */
@@ -30,7 +30,7 @@ const PERF: Record<Perf, { fps: number; count: number }> = {
   standard: { fps: 60, count: 1 },
 };
 
-type Kind = 'jelly' | 'shark' | 'whale' | 'ray' | 'fish';
+type Kind = 'jelly' | 'shark' | 'whale' | 'ray';
 
 interface Creature extends CreatureShape {
   kind: Kind;
@@ -49,12 +49,8 @@ interface Creature extends CreatureShape {
   ty: number;
   /** 被点中后停顿发光，到这个模拟时刻（秒）为止 */
   greetUntil: number;
-  /** 被惊散/推开时叠加在游动上的位移速度（px/s），到 fleeUntil 时线性衰减到 0 */
-  fleeX: number;
-  fleeY: number;
-  fleeUntil: number;
-  /** 这次位移是保存推开（而非换行惊散）：推开期间去掉游速里朝卡片内的分量（沿最近边界点的外法线），迎面游来的也会被推走 */
-  pushed: boolean;
+  /** 保存水波触发后的加速转向游离截止时刻（秒），始终沿自身朝向游动、不硬平移 */
+  boostUntil: number;
   /** 上一帧实际画出的范围（px），用于点击命中 */
   box: { x0: number; y0: number; x1: number; y1: number } | null;
 }
@@ -77,23 +73,19 @@ interface Glow {
 
 /**
  * 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板，
- * reach：绘制轮廓离生物中心（x, y）的最远距离上界（体长倍数，含 creatures.ts 里的蒙版平移和摆动），跟随卡片时据此留安全边距。
- * 水母整体前移 (3.6 - 伞宽) / 2 倍伞径：伞盖前缘最远 2.35，触手末端连同摆动和线宽最远约 2.5，取 2.6；
- * 鲨鱼连尾鳍叶片约 0.7、鲸鲨身体半长 0.5；蝠鲼整体前移 0.45：头鳍尖约 1.05、翼尖约 1.04，加线宽取 1.12；小鱼群散布半径约 2.2，加半条鱼取 2.7（不参与跟随）。
+ * reach：绘制轮廓离生物中心（x, y）的最远距离上界（体长倍数，含 creatures.ts 里的蒙版平移和摆动），用于绕行卡片的舒适轨道半径。
  * 鲨鱼的调色板按 seed 三等分取色，与 drawShark 的品种对应：前两段为尖吻鲨（灰白、蓝灰），第三段为豹纹鲨（沙棕）。
- * 鲨鱼转向放慢到 0.35 rad/s：转弯半径约半个体长，配合身体弯曲，不再原地打转。
  */
 const SPECIES: Record<
   Kind,
   { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; palette: RGB[] }
 > = {
   // 冰青、淡紫
-  jelly: { size: [6, 8.5], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
-  shark: { size: [84, 119], speed: [0.13, 0.17], turn: 0.35, beat: [4.5, 6.5], reach: 0.7, palette: [[190, 196, 206], [152, 158, 210], [214, 186, 140]] },
+  jelly: { size: [9.5, 13.5], speed: [0.18, 0.26], turn: 0.55, beat: [1.8, 2.4], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  shark: { size: [48, 68], speed: [0.24, 0.34], turn: 0.6, beat: [2.4, 3.2], reach: 0.7, palette: [[190, 196, 206], [152, 158, 210], [214, 186, 140]] },
   // 暖金、米色、蓝灰
-  whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], reach: 0.5, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
-  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
-  fish: { size: [18, 24], speed: [0.55, 0.7], turn: 1.2, beat: [5.5, 6.5], reach: 2.7, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
+  whale: { size: [46, 62], speed: [0.2, 0.28], turn: 0.5, beat: [1.9, 2.5], reach: 0.68, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
+  ray: { size: [20, 30], speed: [0.3, 0.38], turn: 0.75, beat: [2.0, 2.7], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
 };
 
 const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void> = {
@@ -101,7 +93,6 @@ const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void
   shark: drawShark,
   whale: drawWhaleShark,
   ray: drawRay,
-  fish: drawFishSchool,
 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -233,10 +224,10 @@ export class Ocean {
   }
 
   /**
-   * 回应输入：type 打字时最近的一只（非小鱼群）缓慢靠近卡片外圈；
-   * break 换行时小鱼群受惊散开；save 保存时所有生物被水波推离卡片。
+   * 回应输入：type 打字时最近的一只缓慢转向并沿卡片外圈巡游；
+   * save 保存时所有生物随水波平滑转向并加速游离卡片（只通过转向和加速响应，绝不横滑）。
    */
-  react(event: 'type' | 'break' | 'save', card: { x: number; y: number; w: number; h: number }): void {
+  react(event: 'type' | 'save', card: { x: number; y: number; w: number; h: number }): void {
     this.card = card;
     const cx = card.x + card.w / 2;
     const cy = card.y + card.h / 2;
@@ -245,7 +236,7 @@ export class Ocean {
         let best = Infinity;
         for (const c of this.creatures) {
           const d = Math.hypot(c.x - cx, c.y - cy);
-          if (c.kind !== 'fish' && d < best) {
+          if (d < best) {
             best = d;
             this.follower = c;
           }
@@ -254,21 +245,14 @@ export class Ocean {
       this.followUntil = this.t + FOLLOW_S;
       return;
     }
-    if (event === 'save') this.followUntil = 0;
+    this.followUntil = 0;
+    const span = Math.max(this.w, this.h) * 0.55;
     for (const c of this.creatures) {
-      if (event === 'break' && c.kind !== 'fish') continue;
-      // 换行背离卡片中心；保存沿卡片上离它最近的边界点的外法线推开。略加随机偏角让鱼群散开
-      const n = event === 'save' ? this.normal(c.x, c.y) : { x: c.x - cx, y: c.y - cy };
-      const a = Math.atan2(n.y, n.x) + rand(-0.3, 0.3);
-      // 小鱼群按自身游速的 2 倍冲出去；水波推力按格子尺寸给，大小生物被推得一样远
-      const push = event === 'break' ? c.speed * c.size * this.cell * 2 : this.cell * 12;
-      c.fleeX = Math.cos(a) * push;
-      c.fleeY = Math.sin(a) * push;
-      c.fleeUntil = this.t + FLEE_S;
-      c.pushed = event === 'save';
-      // 漫游目标也换到背离方向，推力消退后不会立刻掉头游回来
-      c.tx = c.x + Math.cos(a) * this.w * 0.5;
-      c.ty = c.y + Math.sin(a) * this.h * 0.5;
+      const n = this.normal(c.x, c.y);
+      const a = Math.atan2(n.y, n.x) + rand(-0.35, 0.35);
+      c.boostUntil = this.t + BOOST_S;
+      c.tx = c.x + Math.cos(a) * span;
+      c.ty = c.y + Math.sin(a) * span;
     }
   }
 
@@ -329,18 +313,16 @@ export class Ocean {
   private spawn(): void {
     if (this.w === 0) return;
     const n = Math.max(1, Math.min(5, Math.round((3 * this.w * this.h) / (1600 * 900))));
-    // 水母放大后面积约为原来的 4 倍，数量相应收一些
     const counts: Partial<Record<Kind, number>> =
       this.mix === 'jelly'
-        ? { jelly: Math.round(n * 1.2) }
+        ? { jelly: Math.max(2, Math.round(n * 1.1)) }
         : this.mix === 'shark'
-          ? { shark: n, whale: 1 }
+          ? { shark: Math.max(2, n), whale: 1 }
           : {
-              jelly: Math.max(1, Math.round(n * 0.6)),
-              shark: Math.max(1, Math.round(n * 0.7)),
+              jelly: Math.max(1, Math.round(n * 0.65)),
+              shark: Math.max(2, Math.round(n * 0.85)),
               whale: 1,
               ray: 1,
-              fish: Math.max(1, Math.round(n * 0.7)),
             };
     for (const kind of Object.keys(counts) as Kind[]) {
       const count = Math.max(1, Math.round(counts[kind]! * PERF[this.perf].count));
@@ -374,113 +356,88 @@ export class Ocean {
       tx: 0,
       ty: 0,
       greetUntil: 0,
-      fleeX: 0,
-      fleeY: 0,
-      fleeUntil: 0,
-      pushed: false,
+      boostUntil: 0,
       box: null,
     };
     this.retarget(c);
     return c;
   }
 
-  /** 漫游目标可以略超出画面，生物会游出去再游回来 */
+  /** 漫游目标按生物体型外扩一段余量，大生物可以完整游出屏幕后再从容折返 */
   private retarget(c: Creature): void {
-    c.tx = rand(-0.15, 1.15) * this.w;
-    c.ty = rand(-0.15, 1.15) * this.h;
+    const padX = Math.max(this.w * 0.15, c.size * this.cell * 0.65);
+    const padY = Math.max(this.h * 0.15, c.size * this.cell * 0.65);
+    c.tx = rand(-padX, this.w + padX);
+    c.ty = rand(-padY, this.h + padY);
   }
 
   private move(c: Creature, dt: number): void {
     const greeting = c.greetUntil > this.t;
+    const spec = SPECIES[c.kind];
     // 体长/秒 → px/s：换网格密度时相对体长的游速不变
     const v = c.speed * c.size * this.cell * (c.kind === 'jelly' ? 2 : 1);
-    // 约 1.5 秒路程内算到达；转得慢的放宽到转弯半径（v / turn）的 1.2 倍，不会绕着目标打转
-    const reach = v * Math.max(1.5, 1.2 / SPECIES[c.kind].turn);
+    // 约 1.5 秒路程内算到达；按转弯半径（v / turn）放宽，不会绕着目标打转
+    const reach = v * Math.max(1.5, 1.25 / spec.turn);
     if ((c.tx - c.x) ** 2 + (c.ty - c.y) ** 2 < reach * reach) this.retarget(c);
+
     let ax = c.tx;
     let ay = c.ty;
     let pace = 1;
-    const following = c === this.follower && this.followUntil > this.t;
-    // 跟随时的安全边距：可见轮廓主体 + 2 格
-    const margin = (c.size * SPECIES[c.kind].reach + 2) * this.cell;
-    const r = this.card;
+    const boost = Math.max(0, c.boostUntil - this.t) / BOOST_S;
+    const following = c === this.follower && this.followUntil > this.t && boost === 0;
     if (following) {
-      // 跟随卡片：目标是卡片矩形上离它最近的点再向外推一段安全边距，不游到卡片后方
+      // 柔和的卡片外圈巡游：只通过转向引导到切向轨道，绝不硬覆写位移导致横滑
+      const r = this.card;
       const qx = Math.max(r.x, Math.min(r.x + r.w, c.x));
       const qy = Math.max(r.y, Math.min(r.y + r.h, c.y));
-      const ox = c.x - qx;
-      const oy = c.y - qy;
-      const d = Math.hypot(ox, oy);
-      if (d > 0) {
-        ax = qx + (ox / d) * margin;
-        ay = qy + (oy / d) * margin;
+      const n = this.normal(c.x, c.y);
+      const d = Math.hypot(c.x - qx, c.y - qy);
+      const orbit = Math.min(Math.min(this.w, this.h) * 0.28, (c.size * spec.reach * 0.55 + 4) * this.cell);
+      // 顺着当前朝向选左右切线，避免突然原地掉头
+      const cos = Math.cos(c.heading);
+      const sin = Math.sin(c.heading);
+      const sign = -n.y * cos + n.x * sin >= 0 ? 1 : -1;
+      const tx = -n.y * sign;
+      const ty = n.x * sign;
+      if (d > orbit * 1.15) {
+        ax = qx + n.x * orbit + tx * orbit * 0.45;
+        ay = qy + n.y * orbit + ty * orbit * 0.45;
+        pace = 0.85;
+      } else if (d >= orbit * 0.65) {
+        ax = c.x + tx * orbit + n.x * (orbit - d);
+        ay = c.y + ty * orbit + n.y * (orbit - d);
+        pace = 0.65;
       } else {
-        // 已经在卡片后方：沿离开卡片中心的方向游出去
-        ax = c.x + (c.x - r.x - r.w / 2) * 4;
-        ay = c.y + (c.y - r.y - r.h / 2) * 4;
+        // 已在卡片附近或后方：沿切向带一点外偏自然游出，不倒退
+        ax = c.x + (tx * 0.75 + n.x * 0.65) * orbit;
+        ay = c.y + (ty * 0.75 + n.y * 0.65) * orbit;
+        pace = 0.75;
       }
-      // 极缓慢：远处 0.6 倍游速，越近越慢，最低 0.18 倍（转弯半径随之变小，在外圈附近徘徊）
-      pace = 0.6 * Math.max(0.3, Math.min(1, Math.hypot(ax - c.x, ay - c.y) / (v * 2)));
     }
-    // 平滑转向目标，最大角速度有限，游动轨迹呈弧线
+
+    // 平滑转向目标，最大角速度有限，游动轨迹呈自然弧线
     let diff = Math.atan2(ay - c.y, ax - c.x) - c.heading;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    const maxTurn = SPECIES[c.kind].turn * dt;
-    if (!greeting) c.heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
-    // 身体弯曲跟着还要转的角度走，约 0.7 秒跟上，停顿时慢慢回直
-    const bend = greeting ? 0 : Math.max(-1, Math.min(1, diff / 0.8));
-    c.bend += (bend - c.bend) * Math.min(1, dt * 1.5);
+    const maxTurn = spec.turn * (1 + 1.8 * boost) * dt;
+    const stepTurn = greeting ? 0 : Math.max(-maxTurn, Math.min(maxTurn, diff));
+    c.heading += stepTurn;
 
-    // 摆尾/搏动频率固定在自然区间，不随游速放大
-    c.phase += dt * c.beat;
+    // 身体弯曲随实际转向角速度变化（并随小夹角平滑衰减），不再在直游或慢转时长时间僵弯
+    const turnRatio = maxTurn > 0 ? stepTurn / maxTurn : 0;
+    const bendTarget = greeting ? 0 : turnRatio * smooth(0.02, 0.35, Math.abs(diff));
+    c.bend += (bendTarget - c.bend) * Math.min(1, dt * 2.5);
+
+    // 摆尾/搏动频率保持在自然区间，水波游离时略微加快拍尾
+    c.phase += dt * c.beat * (1 + 0.5 * boost);
     // 水母伞盖收缩时推进、舒张时滑行（系数均值约 1）
     const k = c.kind === 'jelly' ? 0.55 + 1.4 * Math.max(0, Math.sin(c.phase)) : 1;
     // 被点中时原地停顿（身体照常摆动）
     if (greeting) return;
-    // 惊散/推开的位移不改朝向，像被水流带走，朝向随新目标慢慢转过去
-    const flee = Math.max(0, c.fleeUntil - this.t) / FLEE_S;
-    let bx = Math.cos(c.heading) * v * pace * k;
-    let by = Math.sin(c.heading) * v * pace * k;
-    if (c.pushed && flee > 0) {
-      // 保存推开：去掉游速里沿最近边界点外法线朝内的分量，迎面或沿边切向游来的生物都不会越过卡片边
-      const n = this.normal(c.x, c.y);
-      const out = bx * n.x + by * n.y;
-      if (out < 0) {
-        bx -= out * n.x;
-        by -= out * n.y;
-      }
-    }
-    let dx = (bx + c.fleeX * flee) * dt;
-    let dy = (by + c.fleeY * flee) * dt;
-    if (following) {
-      // 跟随期间守住「卡片外扩安全边距」的区域：已在区内的沿最近的边退出；下一步会进入的截掉朝内分量、沿边滑动
-      const x0 = r.x - margin;
-      const x1 = r.x + r.w + margin;
-      const y0 = r.y - margin;
-      const y1 = r.y + r.h + margin;
-      const outX = c.x <= x0 || c.x >= x1;
-      const outY = c.y <= y0 || c.y >= y1;
-      if (!outX && !outY) {
-        const ex = c.x - x0 < x1 - c.x ? x0 - c.x : x1 - c.x;
-        const ey = c.y - y0 < y1 - c.y ? y0 - c.y : y1 - c.y;
-        const step = v * dt;
-        if (Math.abs(ex) < Math.abs(ey)) {
-          dx = Math.sign(ex) * Math.min(step, Math.abs(ex));
-          dy = 0;
-        } else {
-          dx = 0;
-          dy = Math.sign(ey) * Math.min(step, Math.abs(ey));
-        }
-      } else if (c.x + dx > x0 && c.x + dx < x1 && c.y + dy > y0 && c.y + dy < y1) {
-        // 在角上两轴都在外侧时，只截穿入更浅的那一轴，另一轴照常滑动
-        const inX = c.x <= x0 ? c.x + dx - x0 : x1 - c.x - dx;
-        const inY = c.y <= y0 ? c.y + dy - y0 : y1 - c.y - dy;
-        if (outX && (!outY || inX <= inY)) dx = (c.x <= x0 ? x0 : x1) - c.x;
-        else dy = (c.y <= y0 ? y0 : y1) - c.y;
-      }
-    }
-    c.x += dx;
-    c.y += dy;
+
+    // 位移始终严格沿自身朝向前进，绝不横滑或倒滑
+    const step = v * pace * (1 + 0.9 * boost) * k * dt;
+    c.x += Math.cos(c.heading) * step;
+    c.y += Math.sin(c.heading) * step;
   }
 
   private render(): void {
