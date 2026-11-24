@@ -285,6 +285,8 @@ export class AbyssalJotView extends ItemView {
   private onInput(e: InputEvent): void {
     this.saveDraft();
     this.updateSend();
+    // 背景生物回应输入，不受输入特效预设影响
+    this.ocean.react(e.inputType === 'insertLineBreak' ? 'break' : 'type', this.cardRect());
     const caret = this.ta.selectionStart;
     if (e.isComposing) {
       this.effects.compose(this.compStart, caret);
@@ -298,6 +300,13 @@ export class AbyssalJotView extends ItemView {
     }
   }
 
+  /** 输入卡相对视图根节点的矩形（px） */
+  private cardRect(): { x: number; y: number; w: number; h: number } {
+    const cardRect = this.card.getBoundingClientRect();
+    const rootRect = this.contentEl.getBoundingClientRect();
+    return { x: cardRect.left - rootRect.left, y: cardRect.top - rootRect.top, w: cardRect.width, h: cardRect.height };
+  }
+
   private async save(): Promise<void> {
     const text = this.ta.value.trim();
     if (!text || this.saving) return;
@@ -306,9 +315,9 @@ export class AbyssalJotView extends ItemView {
       const inbox = this.plugin.data.saveMode === 'inbox';
       const file = inbox ? await this.appendInbox(text) : await this.createNote(text);
       this.flyAway();
-      const cardRect = this.card.getBoundingClientRect();
-      const rootRect = this.contentEl.getBoundingClientRect();
-      this.effects.wave({ x: cardRect.left - rootRect.left, y: cardRect.top - rootRect.top, w: cardRect.width, h: cardRect.height });
+      const rect = this.cardRect();
+      this.effects.wave(rect);
+      this.ocean.react('save', rect);
       this.ta.value = '';
       this.updateSend();
       this.saveDraft.cancel();

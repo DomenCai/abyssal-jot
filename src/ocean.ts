@@ -11,6 +11,10 @@ const GLYPHS = ' .:-otX%8$';
 const MASK = 96;
 /** 点中生物后停顿发光的时长（秒） */
 const GREET_S = 1.2;
+/** 停止打字后，跟随卡片的生物再停留多久才恢复漫游（秒） */
+const FOLLOW_S = 2.5;
+/** 换行惊散、保存水波推开的持续时长（秒），推力线性衰减到 0 */
+const FLEE_S = 1.2;
 /** 暗部底色偏向的冷青蓝 */
 const COLD: RGB = [20, 35, 58];
 /** 亮部反相时的深色字 */
@@ -45,6 +49,10 @@ interface Creature extends CreatureShape {
   ty: number;
   /** 被点中后停顿发光，到这个模拟时刻（秒）为止 */
   greetUntil: number;
+  /** 被惊散/推开时叠加在游动上的位移速度（px/s），到 fleeUntil 时线性衰减到 0 */
+  fleeX: number;
+  fleeY: number;
+  fleeUntil: number;
   /** 上一帧实际画出的范围（px），用于点击命中 */
   box: { x0: number; y0: number; x1: number; y1: number } | null;
 }
@@ -136,6 +144,11 @@ export class Ocean {
   private lastFrame = 0;
   private t = 0;
   private paused = false;
+  /** 输入卡在视图里的矩形（px），由 react() 传入 */
+  private card = { x: 0, y: 0, w: 0, h: 0 };
+  /** 打字时靠近卡片的那只生物，跟随到 followUntil 为止 */
+  private follower: Creature | null = null;
+  private followUntil = 0;
   private reduced: MediaQueryList;
   private onReducedChange = () => this.start();
 
@@ -205,6 +218,45 @@ export class Ocean {
       return { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 };
     }
     return null;
+  }
+
+  /**
+   * 回应输入：type 打字时最近的一只（非小鱼群）缓慢靠近卡片外圈；
+   * break 换行时小鱼群受惊散开；save 保存时所有生物被水波推离卡片。
+   */
+  react(event: 'type' | 'break' | 'save', card: { x: number; y: number; w: number; h: number }): void {
+    this.card = card;
+    const cx = card.x + card.w / 2;
+    const cy = card.y + card.h / 2;
+    if (event === 'save') {
+      this.followUntil = 0;
+    } else {
+      if (this.followUntil <= this.t || !this.follower || !this.creatures.includes(this.follower)) {
+        let best = Infinity;
+        for (const c of this.creatures) {
+          const d = Math.hypot(c.x - cx, c.y - cy);
+          if (c.kind !== 'fish' && d < best) {
+            best = d;
+            this.follower = c;
+          }
+        }
+      }
+      this.followUntil = this.t + FOLLOW_S;
+      if (event === 'type') return;
+    }
+    for (const c of this.creatures) {
+      if (event === 'break' && c.kind !== 'fish') continue;
+      // 背离卡片中心，略加随机偏角让鱼群散开
+      const a = Math.atan2(c.y - cy, c.x - cx) + rand(-0.3, 0.3);
+      // 小鱼群按自身游速的 2 倍冲出去；水波推力按格子尺寸给，大小生物被推得一样远
+      const push = event === 'break' ? c.speed * c.size * this.cell * 2 : this.cell * 12;
+      c.fleeX = Math.cos(a) * push;
+      c.fleeY = Math.sin(a) * push;
+      c.fleeUntil = this.t + FLEE_S;
+      // 漫游目标也换到背离方向，推力消退后不会立刻掉头游回来
+      c.tx = c.x + Math.cos(a) * this.w * 0.5;
+      c.ty = c.y + Math.sin(a) * this.h * 0.5;
+    }
   }
 
   /** 视图可见且未暂停时开始循环；减少动态效果时只画一帧静态画面 */
@@ -285,6 +337,9 @@ export class Ocean {
       tx: 0,
       ty: 0,
       greetUntil: 0,
+      fleeX: 0,
+      fleeY: 0,
+      fleeUntil: 0,
       box: null,
     };
     this.retarget(c);
@@ -301,13 +356,34 @@ export class Ocean {
     const greeting = c.greetUntil > this.t;
     // 体长/秒 → px/s：换网格密度时相对体长的游速不变
     const v = c.speed * c.size * this.cell * (c.kind === 'jelly' ? 2 : 1);
-    const dx = c.tx - c.x;
-    const dy = c.ty - c.y;
     // 约 1.5 秒路程内算到达（大于转弯半径，不会绕着目标打转）
     const reach = v * 1.5;
-    if (dx * dx + dy * dy < reach * reach) this.retarget(c);
+    if ((c.tx - c.x) ** 2 + (c.ty - c.y) ** 2 < reach * reach) this.retarget(c);
+    let ax = c.tx;
+    let ay = c.ty;
+    let pace = 1;
+    if (c === this.follower && this.followUntil > this.t) {
+      // 跟随卡片：目标是卡片矩形上离它最近的点再向外推一段安全距（半个体长 + 2 格），不游到卡片后方
+      const r = this.card;
+      const qx = Math.max(r.x, Math.min(r.x + r.w, c.x));
+      const qy = Math.max(r.y, Math.min(r.y + r.h, c.y));
+      const ox = c.x - qx;
+      const oy = c.y - qy;
+      const d = Math.hypot(ox, oy);
+      if (d > 0) {
+        const gap = c.size * this.cell * 0.5 + this.cell * 2;
+        ax = qx + (ox / d) * gap;
+        ay = qy + (oy / d) * gap;
+      } else {
+        // 已经在卡片后方：沿离开卡片中心的方向游出去
+        ax = c.x + (c.x - r.x - r.w / 2) * 4;
+        ay = c.y + (c.y - r.y - r.h / 2) * 4;
+      }
+      // 极缓慢：远处 0.6 倍游速，越近越慢，最低 0.18 倍（转弯半径随之变小，在外圈附近徘徊）
+      pace = 0.6 * Math.max(0.3, Math.min(1, Math.hypot(ax - c.x, ay - c.y) / (v * 2)));
+    }
     // 平滑转向目标，最大角速度有限，游动轨迹呈弧线
-    let diff = Math.atan2(dy, dx) - c.heading;
+    let diff = Math.atan2(ay - c.y, ax - c.x) - c.heading;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     const maxTurn = SPECIES[c.kind].turn * dt;
     if (!greeting) c.heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
@@ -318,8 +394,10 @@ export class Ocean {
     const k = c.kind === 'jelly' ? 0.55 + 1.4 * Math.max(0, Math.sin(c.phase)) : 1;
     // 被点中时原地停顿（身体照常摆动）
     if (greeting) return;
-    c.x += Math.cos(c.heading) * v * k * dt;
-    c.y += Math.sin(c.heading) * v * k * dt;
+    // 惊散/推开的位移不改朝向，像被水流带走，朝向随新目标慢慢转过去
+    const flee = Math.max(0, c.fleeUntil - this.t) / FLEE_S;
+    c.x += (Math.cos(c.heading) * v * pace * k + c.fleeX * flee) * dt;
+    c.y += (Math.sin(c.heading) * v * pace * k + c.fleeY * flee) * dt;
   }
 
   private render(): void {
