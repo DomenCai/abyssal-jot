@@ -76,6 +76,9 @@ interface Glow {
   rect: Rect;
   born: number;
   color: string;
+  /** 创建时 textarea 的滚动位置，绘制时按滚动差修正，输入框上滚后色块跟着文字走 */
+  scrollLeft: number;
+  scrollTop: number;
 }
 
 interface Wave {
@@ -275,16 +278,19 @@ export class Effects {
     this.kick();
   }
 
-  /** 组字上屏：词框淡出，迸完整涟漪/墨滴，给 [start, end) 叠一层淡色块；Pastel 另在词组周围迸柔彩 ASCII */
-  commit(start: number, end: number): void {
+  /**
+   * 组字上屏：词框淡出，迸完整涟漪/墨滴，给 [start, end) 叠一层淡色块；Pastel 另在词组周围迸柔彩 ASCII。
+   * data 为 compositionend 的上屏文字，为空表示取消组字：只释放词框，不播上屏效果。
+   */
+  commit(start: number, end: number, data: string): void {
     if (this.frame) this.frame.released = performance.now();
     this.kick();
-    if (this.preset === 'off') return;
+    if (this.preset === 'off' || !data) return;
     this.ripple(this.caretAt(end));
     if (end <= start) return;
     const rect = this.wordRect(start, end);
     const color = this.preset === 'dither' ? DITHER_GLOW_COLOR : PASTELS[(this.colorIndex + PASTELS.length - 1) % PASTELS.length];
-    this.glows.push({ rect, born: performance.now(), color });
+    this.glows.push({ rect, born: performance.now(), color, scrollLeft: this.ta.scrollLeft, scrollTop: this.ta.scrollTop });
     if (this.preset === 'pastel' && !this.reduced.matches) this.scatter(rect);
   }
 
@@ -417,7 +423,18 @@ export class Effects {
     const dpr = window.devicePixelRatio || 1;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
-    for (const g of this.glows) this.drawGlow(g, now);
+    if (this.glows.length) {
+      // 色块裁剪到 textarea 的可见区域（padding box），滚出输入框的部分不画
+      const { ta } = this;
+      const taRect = ta.getBoundingClientRect();
+      const rootRect = this.root.getBoundingClientRect();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(taRect.left - rootRect.left + ta.clientLeft, taRect.top - rootRect.top + ta.clientTop, ta.clientWidth, ta.clientHeight);
+      ctx.clip();
+      for (const g of this.glows) this.drawGlow(g, now);
+      ctx.restore();
+    }
     for (const r of this.ripples) this.drawRipple(r, now);
     for (const k of this.inks) this.drawInk(k, now);
     for (const c of this.comets) this.drawComet(c, now);
@@ -430,7 +447,9 @@ export class Effects {
   private drawGlow(g: Glow, now: number): void {
     const { ctx } = this;
     const p = (now - g.born) / GLOW_MS;
-    const { x, y, w, h } = g.rect;
+    const { w, h } = g.rect;
+    const x = g.rect.x - (this.ta.scrollLeft - g.scrollLeft);
+    const y = g.rect.y - (this.ta.scrollTop - g.scrollTop);
     ctx.globalAlpha = GLOW_ALPHA * (1 - p * p);
     ctx.fillStyle = g.color;
     ctx.beginPath();

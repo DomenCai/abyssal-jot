@@ -219,8 +219,8 @@ export class AbyssalJotView extends ItemView {
     this.registerDomEvent(this.ta, 'scroll', () => {
       this.ta.toggleClass('is-scrolled', this.ta.scrollTop > 0);
     });
-    this.registerDomEvent(this.ta, 'compositionend', () => {
-      this.effects.commit(this.compStart, this.ta.selectionStart);
+    this.registerDomEvent(this.ta, 'compositionend', (e) => {
+      this.effects.commit(this.compStart, this.ta.selectionStart, e.data);
     });
 
     const observer = new ResizeObserver(() => {

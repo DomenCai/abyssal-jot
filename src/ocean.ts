@@ -53,6 +53,8 @@ interface Creature extends CreatureShape {
   fleeX: number;
   fleeY: number;
   fleeUntil: number;
+  /** 这次位移是保存推开（而非换行惊散）：推开期间去掉游速里朝向卡片中心的分量，迎面游来的也会被推走 */
+  pushed: boolean;
   /** 上一帧实际画出的范围（px），用于点击命中 */
   box: { x0: number; y0: number; x1: number; y1: number } | null;
 }
@@ -73,19 +75,24 @@ interface Glow {
   px: number;
 }
 
-/** 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板 */
+/**
+ * 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板，
+ * reach：可见轮廓主体离中心的最远距离（体长倍数），跟随卡片时据此留安全边距。
+ * 水母伞盖前缘约 1.8 倍伞径、触手末端约 2.3 倍但已淡到几乎看不见，取 1.8；鲨/鲸鲨身体半长 0.5；
+ * 蝠鲼鞭尾约 1 倍但很细，取 0.7；小鱼群散布半径约 3.2（不参与跟随）。
+ */
 const SPECIES: Record<
   Kind,
-  { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; palette: RGB[] }
+  { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; palette: RGB[] }
 > = {
   // 冰青、淡紫
-  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 1.8, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
   // 米色、蓝灰、暖金
-  shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
+  shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], reach: 0.5, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
   // 暖金、米色、蓝灰
-  whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
-  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], palette: [[150, 170, 205], [180, 172, 210]] },
-  fish: { size: [4, 6], speed: [2, 2.8], turn: 1.2, beat: [5.5, 6.5], palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
+  whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], reach: 0.5, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
+  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 0.7, palette: [[150, 170, 205], [180, 172, 210]] },
+  fish: { size: [4, 6], speed: [2, 2.8], turn: 1.2, beat: [5.5, 6.5], reach: 3.2, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
 };
 
 const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void> = {
@@ -141,7 +148,10 @@ export class Ocean {
   private h = 0;
   private creatures: Creature[] = [];
   private raf = 0;
+  /** 上一次实际渲染的时刻，模拟 dt 取两次渲染的间隔 */
   private lastFrame = 0;
+  /** 下一帧的截止时刻，按 1000/fps 固定推进 */
+  private nextFrame = 0;
   private t = 0;
   private paused = false;
   /** 输入卡在视图里的矩形（px），由 react() 传入 */
@@ -228,9 +238,7 @@ export class Ocean {
     this.card = card;
     const cx = card.x + card.w / 2;
     const cy = card.y + card.h / 2;
-    if (event === 'save') {
-      this.followUntil = 0;
-    } else {
+    if (event === 'type') {
       if (this.followUntil <= this.t || !this.follower || !this.creatures.includes(this.follower)) {
         let best = Infinity;
         for (const c of this.creatures) {
@@ -242,8 +250,9 @@ export class Ocean {
         }
       }
       this.followUntil = this.t + FOLLOW_S;
-      if (event === 'type') return;
+      return;
     }
+    if (event === 'save') this.followUntil = 0;
     for (const c of this.creatures) {
       if (event === 'break' && c.kind !== 'fish') continue;
       // 背离卡片中心，略加随机偏角让鱼群散开
@@ -253,6 +262,7 @@ export class Ocean {
       c.fleeX = Math.cos(a) * push;
       c.fleeY = Math.sin(a) * push;
       c.fleeUntil = this.t + FLEE_S;
+      c.pushed = event === 'save';
       // 漫游目标也换到背离方向，推力消退后不会立刻掉头游回来
       c.tx = c.x + Math.cos(a) * this.w * 0.5;
       c.ty = c.y + Math.sin(a) * this.h * 0.5;
@@ -267,6 +277,7 @@ export class Ocean {
       return;
     }
     this.lastFrame = performance.now();
+    this.nextFrame = this.lastFrame + 1000 / PERF[this.perf].fps;
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -281,11 +292,15 @@ export class Ocean {
     // 切到其他标签页时容器被隐藏：停帧，等 ResizeObserver 在重新显示时再 start()
     if (this.paused || this.reduced.matches || !this.canvas.isShown()) return;
     this.raf = requestAnimationFrame(this.frame);
-    const elapsed = now - this.lastFrame;
-    // 留 2ms 余量，避免 60fps 档因 rAF 抖动被误判为未到间隔而丢帧
-    if (elapsed < 1000 / PERF[this.perf].fps - 2) return;
+    // 留 2ms 余量，避免 rAF 抖动略早到被误判为未到截止时间而丢帧
+    if (now < this.nextFrame - 2) return;
+    // 截止时间按固定间隔推进而不是重置为 now，75/90/144Hz 屏上也能贴近目标帧率；
+    // 落后超过一个间隔（卡顿、切回标签页）时跳到 now 之后的下一个截止点，不补帧
+    const interval = 1000 / PERF[this.perf].fps;
+    this.nextFrame += interval;
+    if (this.nextFrame <= now) this.nextFrame = now + interval;
+    const dt = Math.min(now - this.lastFrame, 100) / 1000;
     this.lastFrame = now;
-    const dt = Math.min(elapsed, 100) / 1000;
     this.t += dt;
     for (const c of this.creatures) this.move(c, dt);
     this.render();
@@ -340,6 +355,7 @@ export class Ocean {
       fleeX: 0,
       fleeY: 0,
       fleeUntil: 0,
+      pushed: false,
       box: null,
     };
     this.retarget(c);
@@ -362,18 +378,20 @@ export class Ocean {
     let ax = c.tx;
     let ay = c.ty;
     let pace = 1;
-    if (c === this.follower && this.followUntil > this.t) {
-      // 跟随卡片：目标是卡片矩形上离它最近的点再向外推一段安全距（半个体长 + 2 格），不游到卡片后方
-      const r = this.card;
+    const following = c === this.follower && this.followUntil > this.t;
+    // 跟随时的安全边距：可见轮廓主体 + 2 格
+    const margin = (c.size * SPECIES[c.kind].reach + 2) * this.cell;
+    const r = this.card;
+    if (following) {
+      // 跟随卡片：目标是卡片矩形上离它最近的点再向外推一段安全边距，不游到卡片后方
       const qx = Math.max(r.x, Math.min(r.x + r.w, c.x));
       const qy = Math.max(r.y, Math.min(r.y + r.h, c.y));
       const ox = c.x - qx;
       const oy = c.y - qy;
       const d = Math.hypot(ox, oy);
       if (d > 0) {
-        const gap = c.size * this.cell * 0.5 + this.cell * 2;
-        ax = qx + (ox / d) * gap;
-        ay = qy + (oy / d) * gap;
+        ax = qx + (ox / d) * margin;
+        ay = qy + (oy / d) * margin;
       } else {
         // 已经在卡片后方：沿离开卡片中心的方向游出去
         ax = c.x + (c.x - r.x - r.w / 2) * 4;
@@ -396,8 +414,50 @@ export class Ocean {
     if (greeting) return;
     // 惊散/推开的位移不改朝向，像被水流带走，朝向随新目标慢慢转过去
     const flee = Math.max(0, c.fleeUntil - this.t) / FLEE_S;
-    c.x += (Math.cos(c.heading) * v * pace * k + c.fleeX * flee) * dt;
-    c.y += (Math.sin(c.heading) * v * pace * k + c.fleeY * flee) * dt;
+    let bx = Math.cos(c.heading) * v * pace * k;
+    let by = Math.sin(c.heading) * v * pace * k;
+    if (c.pushed && flee > 0) {
+      // 保存推开：去掉游速里朝向卡片中心的分量，迎面游来的生物不会压过推力逆流进卡
+      const ux = c.x - r.x - r.w / 2;
+      const uy = c.y - r.y - r.h / 2;
+      const len = Math.hypot(ux, uy);
+      const out = len > 0 ? (bx * ux + by * uy) / len : 0;
+      if (out < 0) {
+        bx -= (out * ux) / len;
+        by -= (out * uy) / len;
+      }
+    }
+    let dx = (bx + c.fleeX * flee) * dt;
+    let dy = (by + c.fleeY * flee) * dt;
+    if (following) {
+      // 跟随期间守住「卡片外扩安全边距」的区域：已在区内的沿最近的边退出；下一步会进入的截掉朝内分量、沿边滑动
+      const x0 = r.x - margin;
+      const x1 = r.x + r.w + margin;
+      const y0 = r.y - margin;
+      const y1 = r.y + r.h + margin;
+      const outX = c.x <= x0 || c.x >= x1;
+      const outY = c.y <= y0 || c.y >= y1;
+      if (!outX && !outY) {
+        const ex = c.x - x0 < x1 - c.x ? x0 - c.x : x1 - c.x;
+        const ey = c.y - y0 < y1 - c.y ? y0 - c.y : y1 - c.y;
+        const step = v * dt;
+        if (Math.abs(ex) < Math.abs(ey)) {
+          dx = Math.sign(ex) * Math.min(step, Math.abs(ex));
+          dy = 0;
+        } else {
+          dx = 0;
+          dy = Math.sign(ey) * Math.min(step, Math.abs(ey));
+        }
+      } else if (c.x + dx > x0 && c.x + dx < x1 && c.y + dy > y0 && c.y + dy < y1) {
+        // 在角上两轴都在外侧时，只截穿入更浅的那一轴，另一轴照常滑动
+        const inX = c.x <= x0 ? c.x + dx - x0 : x1 - c.x - dx;
+        const inY = c.y <= y0 ? c.y + dy - y0 : y1 - c.y - dy;
+        if (outX && (!outY || inX <= inY)) dx = (c.x <= x0 ? x0 : x1) - c.x;
+        else dy = (c.y <= y0 ? y0 : y1) - c.y;
+      }
+    }
+    c.x += dx;
+    c.y += dy;
   }
 
   private render(): void {
