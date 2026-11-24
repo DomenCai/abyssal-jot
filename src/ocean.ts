@@ -86,7 +86,7 @@ const SPECIES: Record<
   { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; palette: RGB[] }
 > = {
   // 冰青、淡紫
-  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  jelly: { size: [6, 8.5], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
   // 米色、蓝灰、暖金
   shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], reach: 0.5, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
   // 暖金、米色、蓝灰
