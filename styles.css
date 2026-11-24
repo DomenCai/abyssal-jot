@@ -8,10 +8,11 @@
   overflow: hidden;
   color-scheme: dark;
   color: rgba(255, 255, 255, 0.9);
-  background-color: #06080c;
+  background-color: #030407;
+  /* 网格线 alpha 随格子档位由视图设置：8px 0.008、10px 0.012、14px 0.016 */
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, var(--abyssal-jot-grid-alpha, 0.012)) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, var(--abyssal-jot-grid-alpha, 0.012)) 1px, transparent 1px);
   /* 网格间距与背景生物的格子一致，随「网格密度」切换 */
   background-size: var(--abyssal-jot-cell, 10px) var(--abyssal-jot-cell, 10px);
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
@@ -54,8 +55,9 @@
   margin: 0 0 22px;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
   font-size: 40px;
-  font-weight: 300;
+  font-weight: 200;
   letter-spacing: -0.02em;
+  -webkit-font-smoothing: antialiased;
   color: rgba(255, 255, 255, 0.92);
 }
 
@@ -63,9 +65,9 @@
   position: relative;
   width: min(560px, 86%);
   padding: 14px 18px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 16px;
-  background: rgba(16, 19, 26, 0.5);
+  background: rgba(10, 13, 20, 0.62);
   backdrop-filter: blur(10px) saturate(1.2);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
@@ -75,12 +77,12 @@
   display: block;
   box-sizing: border-box;
   width: 100%;
-  /* 固定 4 行高，超出在卡内滚动 */
-  height: calc(14px * 1.75 * 4 + 12px);
+  /* 固定 4 行高，超出在卡内滚动；改行高时这里的倍数要一起改 */
+  height: calc(14px * 1.9 * 4 + 12px);
   padding: 6px 2px;
   font-family: inherit;
   font-size: 14px;
-  line-height: 1.75;
+  line-height: 1.9;
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -93,10 +95,19 @@
   box-shadow: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.9);
+  /* 光标颜色随预设：Pastel 粉、Dither 白、动效已关中性白 */
   caret-color: #f9a8d4;
   resize: none;
   overflow-y: auto;
   scrollbar-width: none;
+}
+
+.abyssal-jot[data-preset='dither'] .abyssal-jot-input {
+  caret-color: #fff;
+}
+
+.abyssal-jot[data-preset='off'] .abyssal-jot-input {
+  caret-color: rgba(255, 255, 255, 0.8);
 }
 
 .abyssal-jot .abyssal-jot-input::-webkit-scrollbar {
@@ -194,10 +205,18 @@
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.3);
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+/* 有字可存时点亮 */
+.abyssal-jot button.abyssal-jot-send.is-ready {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
 }
 
 .abyssal-jot button.abyssal-jot-send svg {
@@ -211,11 +230,19 @@
 }
 
 .abyssal-jot-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-height: 18px;
   margin-top: 14px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
   opacity: 0;
+}
+
+.abyssal-jot-status svg {
+  width: 12px;
+  height: 12px;
 }
 
 .abyssal-jot-status.is-visible {
@@ -235,14 +262,23 @@
 .abyssal-jot button.abyssal-jot-pause {
   position: absolute;
   right: 16px;
-  bottom: 12px;
+  /* 固定避开 Obsidian 状态栏 */
+  bottom: 36px;
   z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   height: auto;
   padding: 4px 6px;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.35);
   font-size: 11px;
+}
+
+.abyssal-jot button.abyssal-jot-pause svg {
+  width: 11px;
+  height: 11px;
 }
 
 .abyssal-jot button.abyssal-jot-pause:hover {
@@ -457,7 +493,7 @@
 .abyssal-jot-tip {
   position: absolute;
   left: 16px;
-  bottom: 14px;
+  bottom: 36px;
   z-index: 3;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.3);
@@ -475,11 +511,18 @@
 }
 
 .abyssal-jot select.abyssal-jot-select {
+  -webkit-appearance: none;
+  appearance: none;
   height: 26px;
   padding: 0 24px 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 999px;
   background-color: rgba(16, 19, 26, 0.5);
+  /* 自绘下拉箭头，替换系统样式 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4l2.5 2.5L7.5 4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 10px 10px;
   box-shadow: none;
   color: rgba(255, 255, 255, 0.6);
   font-family: inherit;

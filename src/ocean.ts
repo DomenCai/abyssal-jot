@@ -1,44 +1,46 @@
 /**
- * 背景深海：程序化生物（水母、双髻鲨、鲸鲨、小鱼群）+ ASCII 暗流微粒。
- * 每个生物先用矢量形状画到一张低分辨率蒙版（1 像素 = 1 格），再逐格采样成「色块 + 格内字符」。
+ * 背景深海：程序化生物（水母、鲨、鲸鲨、蝠鲼、小鱼群）+ ASCII 暗流微粒。
+ * 每个生物先画到一张带色光照的低分辨率蒙版（1 像素 = 1 格），蒙版双线性缩小后垫在下层当柔光，
+ * 再逐格采样成「实心底色 + 格内字符」：暗部深底亮字，亮部浅底深字。
  */
-import { drawFishSchool, drawWhaleShark } from './creatures';
+import { CreatureShape, RGB, drawFishSchool, drawJelly, drawRay, drawShark, drawWhaleShark } from './creatures';
 
 /** 由暗到亮的字符梯度 */
 const GLYPHS = ' .:-otX%8$';
 /** 蒙版边长（格），需容纳最大的生物 */
-const MASK = 72;
+const MASK = 96;
 /** 点中生物后停顿发光的时长（秒） */
 const GREET_S = 1.2;
+/** 暗部底色偏向的冷青蓝 */
+const COLD: RGB = [20, 35, 58];
+/** 亮部反相时的深色字 */
+const DARK_INK = 'rgb(6,9,16)';
+const CURRENT_INK = 'rgb(150,165,185)';
 
 export type Mix = 'all' | 'jelly' | 'shark';
-export type Perf = 'saver' | 'standard' | 'smooth';
+export type Perf = 'saver' | 'standard';
 
 /** 性能档位：背景帧率与生物数量系数 */
 const PERF: Record<Perf, { fps: number; count: number }> = {
-  saver: { fps: 20, count: 0.6 },
-  standard: { fps: 30, count: 1 },
-  smooth: { fps: 60, count: 1 },
+  saver: { fps: 30, count: 0.6 },
+  standard: { fps: 60, count: 1 },
 };
 
-type Kind = 'jelly' | 'shark' | 'whale' | 'fish';
-type RGB = [number, number, number];
+type Kind = 'jelly' | 'shark' | 'whale' | 'ray' | 'fish';
 
-interface Creature {
+interface Creature extends CreatureShape {
   kind: Kind;
   x: number;
   y: number;
   heading: number;
-  /** 基础速度，px/s */
+  /** 游速：体长/秒（水母为伞径/秒） */
   speed: number;
-  phase: number;
-  /** 体长或伞径，单位：格 */
-  size: number;
+  /** 摆尾/搏动的相位推进速度，rad/s */
+  beat: number;
   /** 0.45~1，越小越远：更暗 */
   depth: number;
-  /** 0~1 固定随机数，鱼群用它决定队形 */
-  seed: number;
-  color: RGB;
+  /** 亮字颜色（色相向白色靠拢） */
+  ink: string;
   tx: number;
   ty: number;
   /** 被点中后停顿发光，到这个模拟时刻（秒）为止 */
@@ -47,20 +49,86 @@ interface Creature {
   box: { x0: number; y0: number; x1: number; y1: number } | null;
 }
 
-/** 每种生物的参数：尺寸与速度区间、最大角速度（rad/s）、相位推进 */
-const SPECIES: Record<Kind, { size: [number, number]; speed: [number, number]; turn: number; palette: RGB[] }> = {
-  jelly: { size: [5, 7.5], speed: [7, 12], turn: 0.25, palette: [[170, 165, 240], [180, 214, 226], [205, 180, 230]] },
-  shark: { size: [24, 34], speed: [18, 28], turn: 0.4, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206]] },
-  whale: { size: [32, 44], speed: [10, 16], turn: 0.2, palette: [[130, 150, 185], [160, 172, 196]] },
-  fish: { size: [4, 6], speed: [30, 42], turn: 0.8, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
+/** 一帧蒙版的采样结果：蒙版像素 (px, py) 对应屏幕格 (baseCol + px, baseRow + py)；(cx, cy) 是生物中心在蒙版里的坐标 */
+interface Sample {
+  data: Uint8ClampedArray;
+  baseCol: number;
+  baseRow: number;
+  cx: number;
+  cy: number;
+}
+
+/** 柔光层：低分辨率离屏图，px 为一个低分像素对应的 CSS 像素 */
+interface Glow {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  px: number;
+}
+
+/** 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板 */
+const SPECIES: Record<
+  Kind,
+  { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; palette: RGB[] }
+> = {
+  // 冰青、淡紫
+  jelly: { size: [11, 16], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  // 米色、蓝灰、暖金
+  shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
+  // 暖金、米色、蓝灰
+  whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
+  ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], palette: [[150, 170, 205], [180, 172, 210]] },
+  fish: { size: [4, 6], speed: [2, 2.8], turn: 1.2, beat: [5.5, 6.5], palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
+};
+
+const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void> = {
+  jelly: drawJelly,
+  shark: drawShark,
+  whale: drawWhaleShark,
+  ray: drawRay,
+  fish: drawFishSchool,
 };
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 const pick = <T>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+/** 整数格点哈希 → [0, 1) */
+const hash = (x: number, y: number) => {
+  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+/** 平滑值噪声 → [0, 1) */
+const noise2 = (x: number, y: number) => {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const fx = x - xi;
+  const fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const a = hash(xi, yi);
+  const b = hash(xi + 1, yi);
+  const c = hash(xi, yi + 1);
+  const d = hash(xi + 1, yi + 1);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+};
+const glowLayer = (): Glow => {
+  const canvas = document.createElement('canvas');
+  return { canvas, ctx: canvas.getContext('2d')!, px: 1 };
+};
 
 export class Ocean {
   private ctx: CanvasRenderingContext2D;
   private mask: CanvasRenderingContext2D;
+  private near = glowLayer();
+  private far = glowLayer();
+  /** 字符精灵图：每种颜色一张，按格子尺寸与 DPR 预渲染，逐格 drawImage 代替 fillText */
+  private atlases = new Map<string, HTMLCanvasElement>();
+  private atlasKey = '';
+  /** 精灵图里一格的设备像素边长 */
+  private cellPx = 0;
   private w = 0;
   private h = 0;
   private creatures: Creature[] = [];
@@ -174,12 +242,19 @@ export class Ocean {
   private spawn(): void {
     if (this.w === 0) return;
     const n = Math.max(1, Math.min(5, Math.round((3 * this.w * this.h) / (1600 * 900))));
+    // 水母放大后面积约为原来的 4 倍，数量相应收一些
     const counts: Partial<Record<Kind, number>> =
       this.mix === 'jelly'
-        ? { jelly: Math.round(n * 1.6) }
+        ? { jelly: Math.round(n * 1.2) }
         : this.mix === 'shark'
           ? { shark: n, whale: 1 }
-          : { jelly: n, shark: Math.max(1, Math.round(n * 0.7)), whale: 1, fish: Math.max(1, Math.round(n * 0.7)) };
+          : {
+              jelly: Math.max(1, Math.round(n * 0.6)),
+              shark: Math.max(1, Math.round(n * 0.7)),
+              whale: 1,
+              ray: 1,
+              fish: Math.max(1, Math.round(n * 0.7)),
+            };
     for (const kind of Object.keys(counts) as Kind[]) {
       const count = Math.max(1, Math.round(counts[kind]! * PERF[this.perf].count));
       for (let i = 0; i < count; i++) this.creatures.push(this.create(kind));
@@ -191,17 +266,22 @@ export class Ocean {
   private create(kind: Kind): Creature {
     const spec = SPECIES[kind];
     const depth = rand(0.45, 1);
+    const color = pick(spec.palette);
+    const top = Math.max(...color);
+    const hue = color.map((v) => (v * 255) / top) as RGB;
     const c: Creature = {
       kind,
       x: rand(0, this.w),
       y: rand(0, this.h),
       heading: rand(0, Math.PI * 2),
       speed: rand(...spec.speed),
+      beat: rand(...spec.beat),
       phase: rand(0, Math.PI * 2),
       size: rand(...spec.size) * (0.6 + depth * 0.4),
       depth,
       seed: Math.random(),
-      color: pick(spec.palette),
+      hue,
+      ink: `rgb(${hue.map((v) => Math.round(v + (255 - v) * 0.45)).join(',')})`,
       tx: 0,
       ty: 0,
       greetUntil: 0,
@@ -219,100 +299,206 @@ export class Ocean {
 
   private move(c: Creature, dt: number): void {
     const greeting = c.greetUntil > this.t;
+    // 体长/秒 → px/s：换网格密度时相对体长的游速不变
+    const v = c.speed * c.size * this.cell * (c.kind === 'jelly' ? 2 : 1);
     const dx = c.tx - c.x;
     const dy = c.ty - c.y;
-    if (dx * dx + dy * dy < 60 * 60) this.retarget(c);
+    // 约 1.5 秒路程内算到达（大于转弯半径，不会绕着目标打转）
+    const reach = v * 1.5;
+    if (dx * dx + dy * dy < reach * reach) this.retarget(c);
     // 平滑转向目标，最大角速度有限，游动轨迹呈弧线
     let diff = Math.atan2(dy, dx) - c.heading;
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     const maxTurn = SPECIES[c.kind].turn * dt;
     if (!greeting) c.heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
 
-    let v = c.speed;
-    if (c.kind === 'jelly') {
-      // 伞盖收缩时推进，舒张时滑行
-      c.phase += dt * 1.7;
-      v *= 0.35 + 0.9 * Math.max(0, Math.sin(c.phase));
-    } else if (c.kind === 'fish') {
-      c.phase += dt * 6;
-    } else {
-      c.phase += dt * ((c.kind === 'whale' ? 1.2 : 2.2) + c.speed * 0.06);
-    }
+    // 摆尾/搏动频率固定在自然区间，不随游速放大
+    c.phase += dt * c.beat;
+    // 水母伞盖收缩时推进、舒张时滑行（系数均值约 1）
+    const k = c.kind === 'jelly' ? 0.55 + 1.4 * Math.max(0, Math.sin(c.phase)) : 1;
     // 被点中时原地停顿（身体照常摆动）
     if (greeting) return;
-    c.x += Math.cos(c.heading) * v * dt;
-    c.y += Math.sin(c.heading) * v * dt;
+    c.x += Math.cos(c.heading) * v * k * dt;
+    c.y += Math.sin(c.heading) * v * k * dt;
   }
 
   private render(): void {
     if (this.w === 0) return;
-    const { ctx } = this;
+    const { ctx, cell } = this;
     const dpr = window.devicePixelRatio || 1;
+    const key = `${cell}@${dpr}`;
+    if (key !== this.atlasKey) {
+      this.atlasKey = key;
+      this.atlases.clear();
+      this.cellPx = Math.round(cell * dpr);
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
-    ctx.font = `${this.cell - 1}px ui-monospace, Menlo, monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
     this.drawCurrents();
-    for (const c of this.creatures) this.drawCreature(c);
+
+    // 省电档只画单层柔光；标准档远近分两层：远处更模糊、更冷、更暗，近处更清晰、微暖
+    const layered = this.perf === 'standard';
+    this.prepGlow(this.near, cell * (layered ? 2 : 3));
+    if (layered) this.prepGlow(this.far, cell * 4);
+    const samples: Sample[] = [];
+    for (const c of this.creatures) {
+      const s = this.paintMask(c);
+      samples.push(s);
+      const l = layered && c.depth < 0.72 ? this.far : this.near;
+      // 浮点坐标，不吸附格子
+      l.ctx.globalAlpha = 0.45 + c.depth * 0.55;
+      l.ctx.drawImage(this.mask.canvas, (s.baseCol * cell) / l.px, (s.baseRow * cell) / l.px, (MASK * cell) / l.px, (MASK * cell) / l.px);
+    }
+    if (layered) {
+      this.tintGlow(this.far, 'rgba(30, 60, 115, 0.5)');
+      this.tintGlow(this.near, 'rgba(255, 214, 170, 0.1)');
+      this.compositeGlow(this.far, 0.35);
+    }
+    this.compositeGlow(this.near, layered ? 0.5 : 0.45);
+
+    this.creatures.forEach((c, i) => this.drawCells(c, samples[i]));
   }
 
-  /** 极暗的 ASCII 暗流：几层缓慢移动的正弦场叠加，超过阈值的格子画 . : - */
+  /** 预渲染一种颜色的字符精灵图 */
+  private atlas(color: string): HTMLCanvasElement {
+    let a = this.atlases.get(color);
+    if (a) return a;
+    const p = this.cellPx;
+    a = document.createElement('canvas');
+    a.width = p * GLYPHS.length;
+    a.height = p;
+    const g = a.getContext('2d')!;
+    g.font = `${(this.cell - 1) * (p / this.cell)}px ui-monospace, Menlo, monospace`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillStyle = color;
+    for (let i = 1; i < GLYPHS.length; i++) g.fillText(GLYPHS[i], i * p + p / 2, p / 2);
+    this.atlases.set(color, a);
+    return a;
+  }
+
+  private prepGlow(l: Glow, px: number): void {
+    const gw = Math.ceil(this.w / px) + 1;
+    const gh = Math.ceil(this.h / px) + 1;
+    if (l.canvas.width !== gw || l.canvas.height !== gh) {
+      l.canvas.width = gw;
+      l.canvas.height = gh;
+    } else {
+      l.ctx.clearRect(0, 0, gw, gh);
+    }
+    l.px = px;
+    l.ctx.imageSmoothingQuality = 'high';
+  }
+
+  /** 只给已有光的区域上色 */
+  private tintGlow(l: Glow, color: string): void {
+    const g = l.ctx;
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = color;
+    g.fillRect(0, 0, l.canvas.width, l.canvas.height);
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  /** 低分图双线性放大垫到主画布上，放大本身就是模糊（不用 ctx.filter） */
+  private compositeGlow(l: Glow, alpha: number): void {
+    const { ctx } = this;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(l.canvas, 0, 0, l.canvas.width * l.px, l.canvas.height * l.px);
+    ctx.globalAlpha = 1;
+  }
+
+  /** 暗流：低频包络圈出横向拉伸的成团波带，团内稀疏地画 . : ，团外基本不画 */
   private drawCurrents(): void {
     const { ctx, t, cell } = this;
     const cols = Math.ceil(this.w / cell);
     const rows = Math.ceil(this.h / cell);
     // 场按 10px 基准格计算，换网格密度时暗流的形状和流速保持不变
     const k = cell / 10;
-    ctx.fillStyle = 'rgb(150, 165, 185)';
+    const ink = this.atlas(CURRENT_INK);
+    const p = this.cellPx;
+    // 只和列或只和行有关的项先算好，逐格只剩一次 sin 乘积
+    const gateCol = new Float32Array(cols);
+    const warpCol = new Float32Array(cols);
+    for (let c = 0; c < cols; c++) {
+      gateCol[c] = Math.sin(c * k * 0.05 + t * 0.02);
+      warpCol[c] = Math.sin(c * k * 0.03 - t * 0.04) * 2.5;
+    }
     for (let r = 0; r < rows; r++) {
+      const fr = r * k;
+      const gateRow = Math.sin(fr * 0.11 - t * 0.015);
+      const warpRow = Math.sin(fr * 0.07 + t * 0.05) * 2 - t * 0.12;
       for (let c = 0; c < cols; c++) {
-        const fc = c * k;
-        const fr = r * k;
-        const n =
-          Math.sin(fc * 0.09 + t * 0.12) * Math.sin(fr * 0.21 - t * 0.08) +
-          Math.sin((fc + fr * 0.6) * 0.045 - t * 0.05) * 0.7 +
-          Math.sin(c * 1.7 + r * 3.1) * 0.12;
-        if (n < 1.15) continue;
-        ctx.globalAlpha = Math.min(0.2, (n - 1.15) * 0.4);
-        ctx.fillText(n > 1.45 ? '-' : n > 1.3 ? ':' : '.', c * cell + cell / 2, r * cell + cell / 2);
+        const gate = gateCol[c] * gateRow;
+        if (gate < 0.05) continue;
+        const band = Math.sin(c * k * 0.11 + warpRow) * Math.sin(fr * 0.42 + warpCol[c]);
+        const env = smooth(0.3, 0.8, band) * smooth(0.05, 0.6, gate);
+        if (env < 0.03) continue;
+        const grain = hash(c, r);
+        // 团心密、团边疏
+        if (grain > env * 1.3) continue;
+        const gi = env > 0.85 && grain < 0.06 ? 3 : grain < env * 0.45 ? 2 : 1;
+        ctx.globalAlpha = 0.35 * env;
+        ctx.drawImage(ink, gi * p, 0, p, p, c * cell, r * cell, cell, cell);
       }
     }
     ctx.globalAlpha = 1;
   }
 
-  private drawCreature(c: Creature): void {
+  /** 画一帧带色光照蒙版：按亚格小数平移，格子前沿逐渐变亮、尾部逐渐变暗，不再整只一下跳一格 */
+  private paintMask(c: Creature): Sample {
     const m = this.mask;
+    const gx = c.x / this.cell;
+    const gy = c.y / this.cell;
+    const cx = MASK / 2 + gx - Math.floor(gx);
+    const cy = MASK / 2 + gy - Math.floor(gy);
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, MASK, MASK);
-    m.translate(MASK / 2, MASK / 2);
+    m.translate(cx, cy);
     m.rotate(c.heading);
-    m.fillStyle = '#fff';
-    m.strokeStyle = '#fff';
     m.lineCap = 'round';
-    if (c.kind === 'jelly') drawJelly(m, c);
-    else if (c.kind === 'shark') drawShark(m, c);
-    else if (c.kind === 'whale') drawWhaleShark(m, c);
-    else drawFishSchool(m, c);
+    m.lineJoin = 'round';
+    DRAW[c.kind](m, c);
+    return {
+      data: m.getImageData(0, 0, MASK, MASK).data,
+      baseCol: Math.floor(gx) - MASK / 2,
+      baseRow: Math.floor(gy) - MASK / 2,
+      cx,
+      cy,
+    };
+  }
 
-    const data = m.getImageData(0, 0, MASK, MASK).data;
+  private drawCells(c: Creature, s: Sample): void {
     const { ctx, cell } = this;
-    // 蒙版中心对齐到全局网格，移动时按格步进，保留像素感
-    const baseCol = Math.round(c.x / cell) - MASK / 2;
-    const baseRow = Math.round(c.y / cell) - MASK / 2;
+    const { data, baseCol, baseRow } = s;
     // 被点中时亮度随一个 0→1→0 的包络增强
     const left = c.greetUntil - this.t;
     const glow = left > 0 ? Math.max(0.4, Math.sin(Math.PI * (1 - left / GREET_S))) : 0;
-    const lift = glow * 70;
-    const [r, g, b] = c.color.map((v) => Math.min(255, v + lift));
     const fade = Math.min(1, (0.35 + c.depth * 0.65) * (1 + glow * 0.8));
+    const light = this.atlas(c.ink);
+    const dark = this.atlas(DARK_INK);
+    const p = this.cellPx;
+    // 省电档不叠斑驳噪声
+    const noisy = this.perf === 'standard';
+    const cos = Math.cos(c.heading);
+    const sin = Math.sin(c.heading);
+    const seed = c.seed * 131;
     let x0 = Infinity;
     let y0 = Infinity;
     let x1 = -Infinity;
     let y1 = -Infinity;
     for (let py = 0; py < MASK; py++) {
       for (let px = 0; px < MASK; px++) {
-        const lum = data[(py * MASK + px) * 4 + 3] / 255;
+        const i = (py * MASK + px) * 4;
+        const a = data[i + 3];
+        if (a === 0) continue;
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const top = Math.max(r, g, b);
+        let lum = (top * a) / 65025;
         if (lum < 0.08) continue;
         const x = (baseCol + px) * cell;
         const y = (baseRow + py) * cell;
@@ -321,149 +507,42 @@ export class Ocean {
         y0 = Math.min(y0, y);
         x1 = Math.max(x1, x + cell);
         y1 = Math.max(y1, y + cell);
-        ctx.fillStyle = `rgba(${r},${g},${b},${(lum * (0.3 + glow * 0.25) * fade).toFixed(3)})`;
+        if (noisy) {
+          // 低频噪声取在生物本体坐标上：跟着生物走、不随屏幕闪烁；高光处减弱，保住轮廓
+          const dx = px + 0.5 - s.cx;
+          const dy = py + 0.5 - s.cy;
+          const n = noise2((dx * cos + dy * sin) * 0.25 + seed, (dy * cos - dx * sin) * 0.25);
+          lum = Math.max(0, lum + (n - 0.5) * 0.2 * (1 - smooth(0.75, 0.95, lum)));
+        }
+        lum = Math.min(1, lum * (1 + glow * 0.6));
+
+        // 底色：色相取蒙版颜色，暗部偏向冷青蓝，lum > 0.8 提白
+        const toHue = smooth(0.05, 0.6, lum);
+        const white = lum > 0.8 ? (lum - 0.8) * 3 : 0;
+        let cr = COLD[0] + ((r * 255) / top - COLD[0]) * toHue;
+        let cg = COLD[1] + ((g * 255) / top - COLD[1]) * toHue;
+        let cb = COLD[2] + ((b * 255) / top - COLD[2]) * toHue;
+        cr += (255 - cr) * white;
+        cg += (255 - cg) * white;
+        cb += (255 - cb) * white;
+        ctx.fillStyle = `rgba(${cr | 0},${cg | 0},${cb | 0},${(Math.pow(lum, 0.8) * 0.85 * fade).toFixed(3)})`;
         ctx.fillRect(x + 0.5, y + 0.5, cell - 1, cell - 1);
-        const glyph = GLYPHS[Math.min(GLYPHS.length - 1, Math.round(lum * (GLYPHS.length - 1)))];
-        if (glyph === ' ') continue;
-        ctx.fillStyle = `rgba(${Math.min(255, r + 40)},${Math.min(255, g + 40)},${Math.min(255, b + 40)},${((0.3 + lum * 0.65) * fade).toFixed(3)})`;
-        ctx.fillText(glyph, x + cell / 2, y + cell / 2);
+
+        const gi = Math.min(GLYPHS.length - 1, Math.round(lum * (GLYPHS.length - 1)));
+        if (gi === 0) continue;
+        // lum 0.55~0.7 之间亮字平滑过渡到深字
+        const inv = smooth(0.55, 0.7, lum);
+        if (inv < 1) {
+          ctx.globalAlpha = (0.3 + lum * 0.65) * fade * (1 - inv);
+          ctx.drawImage(light, gi * p, 0, p, p, x, y, cell, cell);
+        }
+        if (inv > 0) {
+          ctx.globalAlpha = (0.7 + lum * 0.25) * Math.min(1, fade * 1.25) * inv;
+          ctx.drawImage(dark, gi * p, 0, p, p, x, y, cell, cell);
+        }
+        ctx.globalAlpha = 1;
       }
     }
     c.box = x0 === Infinity ? null : { x0, y0, x1, y1 };
   }
-}
-
-/** 水母：朝 +x 方向的半椭圆伞盖（随相位搏动）+ 拖在身后的正弦触手与口腕 */
-function drawJelly(m: CanvasRenderingContext2D, c: Creature): void {
-  const s = c.size;
-  const pulse = Math.sin(c.phase);
-  const bw = s * (0.95 + 0.15 * pulse);
-  const bh = s * (1 - 0.14 * pulse);
-
-  m.globalAlpha = 0.5;
-  m.beginPath();
-  m.ellipse(0, 0, bw, bh, 0, -Math.PI / 2, Math.PI / 2);
-  m.closePath();
-  m.fill();
-  m.globalAlpha = 0.35;
-  m.beginPath();
-  m.ellipse(bw * 0.3, 0, bw * 0.45, bh * 0.5, 0, 0, Math.PI * 2);
-  m.fill();
-  m.globalAlpha = 0.9;
-  m.lineWidth = 0.8;
-  m.beginPath();
-  m.ellipse(0, 0, bw, bh, 0, -Math.PI / 2, Math.PI / 2);
-  m.stroke();
-
-  const len = s * 2.6;
-  const tentacles = 6;
-  m.lineWidth = 0.7;
-  for (let i = 0; i < tentacles; i++) {
-    const y0 = -bh * 0.85 + (i * 1.7 * bh) / (tentacles - 1);
-    m.globalAlpha = 0.55;
-    m.beginPath();
-    m.moveTo(0, y0);
-    for (let k = 1; k <= 12; k++) {
-      const f = k / 12;
-      m.lineTo(-len * f * (0.85 + 0.15 * Math.sin(i * 2.1)), y0 * (1 - 0.2 * f) + Math.sin(c.phase - k * 0.55 + i * 1.3) * (0.3 + f * 1.6));
-    }
-    m.stroke();
-  }
-  // 两条更粗、更短的口腕
-  m.lineWidth = 1.6;
-  m.globalAlpha = 0.42;
-  for (const side of [-1, 1]) {
-    m.beginPath();
-    m.moveTo(0, side * bh * 0.2);
-    for (let k = 1; k <= 8; k++) {
-      const f = k / 8;
-      m.lineTo(-len * 0.65 * f, side * bh * 0.2 + Math.sin(c.phase * 0.8 - k * 0.5 + side) * f * 1.4);
-    }
-    m.stroke();
-  }
-  m.globalAlpha = 1;
-}
-
-/** 双髻鲨（俯视）：朝 +x 方向，脊柱从头到尾做振幅递增的正弦摆动 */
-function drawShark(m: CanvasRenderingContext2D, c: Creature): void {
-  const L = c.size;
-  const N = 14;
-  const amp = L * 0.08;
-  const pts: { x: number; y: number }[] = [];
-  for (let i = 0; i <= N; i++) {
-    const s = i / N;
-    pts.push({ x: L * (0.5 - s), y: amp * Math.pow(s, 1.6) * Math.sin(c.phase - s * 5.5) });
-  }
-  // 体宽轮廓：颈部窄，胸部最宽，向尾柄收细
-  const width = (s: number) => L * (s < 0.3 ? 0.06 + (s / 0.3) * 0.055 : 0.115 * Math.pow(1 - (s - 0.3) / 0.7, 1.3) + 0.012);
-  const tangentAt = (i: number) => {
-    const a = pts[Math.max(0, i - 1)];
-    const b = pts[Math.min(N, i + 1)];
-    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-    // 朝向头部的单位向量
-    return { x: (a.x - b.x) / d, y: (a.y - b.y) / d };
-  };
-
-  m.globalAlpha = 0.55;
-  for (let i = 0; i <= N; i++) {
-    m.beginPath();
-    m.arc(pts[i].x, pts[i].y, width(i / N) / 2, 0, Math.PI * 2);
-    m.fill();
-  }
-  // 脊线高光
-  m.globalAlpha = 0.45;
-  m.lineWidth = 0.7;
-  m.beginPath();
-  m.moveTo(pts[0].x, pts[0].y);
-  for (const p of pts) m.lineTo(p.x, p.y);
-  m.stroke();
-
-  // 锤头与两端的眼睛
-  const head = pts[0];
-  const ht = tangentAt(0);
-  const angle = Math.atan2(ht.y, ht.x);
-  m.globalAlpha = 0.65;
-  m.beginPath();
-  m.ellipse(head.x, head.y, L * 0.045, L * 0.16, angle, 0, Math.PI * 2);
-  m.fill();
-  m.globalAlpha = 1;
-  for (const side of [-1, 1]) {
-    m.beginPath();
-    m.arc(head.x - ht.y * side * L * 0.15, head.y + ht.x * side * L * 0.15, 0.7, 0, Math.PI * 2);
-    m.fill();
-  }
-
-  // 鳍：胸鳍、腹鳍向后外侧展开
-  const fin = (i: number, back: number, out: number, alpha: number) => {
-    const p = pts[i];
-    const t = tangentAt(i);
-    m.globalAlpha = alpha;
-    for (const side of [-1, 1]) {
-      const nx = -t.y * side;
-      const ny = t.x * side;
-      m.beginPath();
-      m.moveTo(p.x + t.x * L * 0.03, p.y + t.y * L * 0.03);
-      m.lineTo(p.x - t.x * back * L + nx * out * L, p.y - t.y * back * L + ny * out * L);
-      m.lineTo(p.x - t.x * L * 0.06, p.y - t.y * L * 0.06);
-      m.closePath();
-      m.fill();
-    }
-  };
-  fin(4, 0.16, 0.17, 0.45);
-  fin(9, 0.06, 0.06, 0.35);
-
-  // 叉形尾鳍：上叶长、下叶短
-  const tail = pts[N];
-  const tt = tangentAt(N);
-  m.globalAlpha = 0.6;
-  m.lineWidth = 1;
-  const lobe = (back: number, out: number) => {
-    m.beginPath();
-    m.moveTo(tail.x, tail.y);
-    m.lineTo(tail.x - tt.x * back * L - tt.y * out * L, tail.y - tt.y * back * L + tt.x * out * L);
-    m.stroke();
-  };
-  lobe(0.13, 0.09);
-  lobe(0.08, -0.05);
-  m.globalAlpha = 1;
 }

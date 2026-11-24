@@ -8,14 +8,18 @@ import { Mix, Ocean, Perf } from './ocean';
 
 export const VIEW_TYPE = 'abyssal-jot-view';
 
-/** 预设在输入卡胶囊和状态行里的文案 */
+/** 预设在输入卡胶囊和状态行里的图标与文案；键的顺序就是胶囊点击循环的顺序 */
 const PRESETS: Record<Preset, { icon: string; chip: string; status: string }> = {
-  pastel: { icon: 'sparkles', chip: 'Pastel 涟漪靶框', status: 'Pastel 涟漪 + 词框锁定 (X.. Y..) + 换行彗星尾迹' },
-  dither: { icon: 'droplet', chip: 'Dither 墨滴飞溅', status: 'Dither 1-Bit 墨滴飞溅 + 换行流光尾迹' },
+  dither: { icon: 'droplet', chip: 'Dither 墨滴飞溅', status: '已切换为：Dither 1-Bit 墨滴飞溅 + 换行像素彗尾' },
+  pastel: { icon: 'sparkles', chip: 'Pastel 涟漪靶框', status: '已切换为：Pastel 涟漪 + 词框锁定 (X.. Y..) + 换行彗星尾迹' },
+  off: { icon: 'pause', chip: '动效已关', status: '已关闭输入特效' },
 };
+const PRESET_ORDER = Object.keys(PRESETS) as Preset[];
 
 const MIXES: Record<Mix, string> = { all: '多种混游', jelly: '只看水母', shark: '只看鲨鱼' };
 const CELLS: Record<string, string> = { '8': '极细格', '10': '细格', '14': '粗格' };
+/** 背景网格线的 alpha 随格子档位：格子越细线越密，线要越淡 */
+const GRID_ALPHA: Record<string, number> = { '8': 0.008, '10': 0.012, '14': 0.016 };
 
 /** 本地时间的日期与时分秒（补零），用于文件名、frontmatter 和收件箱标题 */
 function localStamp(): { date: string; time: string[] } {
@@ -35,6 +39,7 @@ export class AbyssalJotView extends ItemView {
   private sound = new KeySound();
   private ta!: HTMLTextAreaElement;
   private card!: HTMLElement;
+  private sendBtn!: HTMLElement;
   private historyCount!: HTMLElement;
   private statusEl!: HTMLElement;
   private compStart = 0;
@@ -91,6 +96,7 @@ export class AbyssalJotView extends ItemView {
     soundBtn.toggleClass('is-active', this.plugin.data.keySound);
     const sendBtn = actions.createEl('button', { cls: 'abyssal-jot-send', attr: { 'aria-label': '保存为笔记' } });
     setIcon(sendBtn, 'arrow-up');
+    this.sendBtn = sendBtn;
     card.createDiv({
       cls: 'abyssal-jot-hint',
       text: `${Platform.isMacOS ? '⌘' : 'Ctrl'} + Enter · 保存为笔记`,
@@ -99,7 +105,9 @@ export class AbyssalJotView extends ItemView {
     this.statusEl = stage.createDiv({ cls: 'abyssal-jot-status' });
 
     const fx = root.createEl('canvas', { cls: 'abyssal-jot-fx' });
-    const pauseBtn = root.createEl('button', { cls: 'abyssal-jot-pause', text: '暂停动效' });
+    const pauseBtn = root.createEl('button', { cls: 'abyssal-jot-pause' });
+    const pauseIcon = pauseBtn.createSpan();
+    const pauseText = pauseBtn.createSpan();
     const historyBtn = root.createEl('button', { cls: 'abyssal-jot-history-btn' });
     setIcon(historyBtn.createSpan(), 'history');
     historyBtn.createSpan({ text: 'History' });
@@ -107,7 +115,11 @@ export class AbyssalJotView extends ItemView {
     this.updateHistoryCount();
 
     const { data } = this.plugin;
-    root.style.setProperty('--abyssal-jot-cell', `${data.cell}px`);
+    const applyCell = () => {
+      root.style.setProperty('--abyssal-jot-cell', `${data.cell}px`);
+      root.style.setProperty('--abyssal-jot-grid-alpha', String(GRID_ALPHA[data.cell]));
+    };
+    applyCell();
     this.ocean = new Ocean(ocean, data.cell, data.mix, data.perf);
     this.echo = new EchoBubble(root, {
       onOpen: (file) => void this.app.workspace.getLeaf('tab').openFile(file),
@@ -130,7 +142,7 @@ export class AbyssalJotView extends ItemView {
     cellSelect.value = String(data.cell);
     cellSelect.onchange = async () => {
       data.cell = Number(cellSelect.value);
-      root.style.setProperty('--abyssal-jot-cell', `${data.cell}px`);
+      applyCell();
       this.ocean.setCell(data.cell);
       await this.plugin.persist();
     };
@@ -154,19 +166,23 @@ export class AbyssalJotView extends ItemView {
 
     this.ta.value = this.plugin.data.draft;
     this.ta.setSelectionRange(this.ta.value.length, this.ta.value.length);
+    this.updateSend();
 
     const applyPreset = () => {
-      const preset = PRESETS[this.plugin.data.preset];
+      const preset = PRESETS[data.preset];
       presetBtn.empty();
       setIcon(presetBtn.createSpan(), preset.icon);
       presetBtn.createSpan({ text: preset.chip });
-      this.effects.setPreset(this.plugin.data.preset);
+      presetBtn.toggleClass('is-active', data.preset !== 'off');
+      // 光标颜色等随预设变化的样式挂在根节点上
+      root.setAttr('data-preset', data.preset);
+      this.effects.setPreset(data.preset);
     };
     applyPreset();
     presetBtn.onclick = async () => {
-      this.plugin.data.preset = this.plugin.data.preset === 'pastel' ? 'dither' : 'pastel';
+      data.preset = PRESET_ORDER[(PRESET_ORDER.indexOf(data.preset) + 1) % PRESET_ORDER.length];
       applyPreset();
-      this.showStatus(`已切换为：${PRESETS[this.plugin.data.preset].status}`);
+      this.showStatus(PRESETS[data.preset].icon, PRESETS[data.preset].status);
       await this.plugin.persist();
       this.ta.focus();
     };
@@ -181,9 +197,14 @@ export class AbyssalJotView extends ItemView {
     };
     sendBtn.onclick = () => void this.save();
     let paused = false;
+    const applyPause = () => {
+      setIcon(pauseIcon, paused ? 'play' : 'pause');
+      pauseText.setText(paused ? '继续动效' : '暂停动效');
+    };
+    applyPause();
     pauseBtn.onclick = () => {
       paused = !paused;
-      pauseBtn.setText(paused ? '继续动效' : '暂停动效');
+      applyPause();
       this.ocean.setPaused(paused);
     };
 
@@ -199,8 +220,7 @@ export class AbyssalJotView extends ItemView {
       this.ta.toggleClass('is-scrolled', this.ta.scrollTop > 0);
     });
     this.registerDomEvent(this.ta, 'compositionend', () => {
-      this.effects.releaseFrame();
-      this.effects.ripple(this.effects.caretAt(this.ta.selectionStart));
+      this.effects.commit(this.compStart, this.ta.selectionStart);
     });
 
     const observer = new ResizeObserver(() => {
@@ -232,6 +252,7 @@ export class AbyssalJotView extends ItemView {
     this.ta.focus();
     this.ta.setRangeText(link, this.ta.selectionStart, this.ta.selectionEnd, 'end');
     this.saveDraft();
+    this.updateSend();
     this.effects.ripple(this.effects.caretAt(this.ta.selectionStart));
   }
 
@@ -256,11 +277,17 @@ export class AbyssalJotView extends ItemView {
     this.sound.play(kind, e.repeat);
   }
 
+  /** 发送按钮：输入为空时变暗，有字时点亮 */
+  private updateSend(): void {
+    this.sendBtn.toggleClass('is-ready', this.ta.value.trim() !== '');
+  }
+
   private onInput(e: InputEvent): void {
     this.saveDraft();
+    this.updateSend();
     const caret = this.ta.selectionStart;
     if (e.isComposing) {
-      this.effects.setFrame(this.compStart, caret);
+      this.effects.compose(this.compStart, caret);
       return;
     }
     if (e.inputType === 'insertLineBreak' && this.lineBreakFrom) {
@@ -283,11 +310,12 @@ export class AbyssalJotView extends ItemView {
       const rootRect = this.contentEl.getBoundingClientRect();
       this.effects.wave({ x: cardRect.left - rootRect.left, y: cardRect.top - rootRect.top, w: cardRect.width, h: cardRect.height });
       this.ta.value = '';
+      this.updateSend();
       this.saveDraft.cancel();
       this.plugin.data.draft = '';
       await this.plugin.persist();
       this.updateHistoryCount();
-      this.showStatus(inbox ? `已追加到 ${file.path}` : `已沉入 ${file.path}`);
+      this.showStatus('check', inbox ? `已追加到 ${file.path}` : `已沉入 ${file.path}`);
     } catch (err) {
       new Notice(`潜思：保存失败，${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -331,8 +359,11 @@ export class AbyssalJotView extends ItemView {
     ghost.addEventListener('animationend', () => ghost.remove());
   }
 
-  private showStatus(text: string): void {
-    this.statusEl.setText(text);
+  /** 卡片下方的状态行：图标 + 文案，3 秒淡出 */
+  private showStatus(icon: string, text: string): void {
+    this.statusEl.empty();
+    setIcon(this.statusEl.createSpan(), icon);
+    this.statusEl.createSpan({ text });
     this.statusEl.removeClass('is-visible');
     void this.statusEl.offsetWidth;
     this.statusEl.addClass('is-visible');

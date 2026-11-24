@@ -1,4 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import type { Preset } from './effects';
 import type { Mix, Perf } from './ocean';
 import { AbyssalJotView, VIEW_TYPE } from './view';
 
@@ -10,7 +11,7 @@ export interface JotData {
   /** 收件箱文件路径（Vault 相对路径） */
   inboxPath: string;
   /** 输入特效预设，在视图内切换后记住 */
-  preset: 'pastel' | 'dither';
+  preset: Preset;
   /** 背景生物组合，在视图右上角切换后记住 */
   mix: Mix;
   /** 网格格子边长（px），在视图右上角切换后记住 */
@@ -40,6 +41,8 @@ export default class AbyssalJotPlugin extends Plugin {
 
   async onload(): Promise<void> {
     this.data = Object.assign({}, DEFAULT_DATA, await this.loadData());
+    // 旧版的「流畅」档已并入标准档
+    if (this.data.perf !== 'saver') this.data.perf = 'standard';
 
     this.registerView(VIEW_TYPE, (leaf) => new AbyssalJotView(leaf, this));
     this.addRibbonIcon('waves', '打开潜思', () => this.openView());
@@ -90,9 +93,8 @@ class JotSettingTab extends PluginSettingTab {
       .setDesc('背景动画的帧率与生物数量。笔记本用电池时可选省电。')
       .addDropdown((dropdown) =>
         dropdown
-          .addOption('saver', '省电（20fps，生物较少）')
-          .addOption('standard', '标准（30fps）')
-          .addOption('smooth', '流畅（60fps）')
+          .addOption('saver', '省电（30fps，生物较少）')
+          .addOption('standard', '标准（60fps）')
           .setValue(data.perf)
           .onChange(async (value) => {
             data.perf = value as Perf;
