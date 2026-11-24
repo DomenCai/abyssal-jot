@@ -3,7 +3,7 @@
  * 每个生物先画到一张带色光照的低分辨率蒙版（1 像素 = 1 格），蒙版双线性缩小后垫在下层当柔光，
  * 再逐格采样成「实心底色 + 格内字符」：暗部深底亮字，亮部浅底深字。
  */
-import { CreatureShape, RGB, drawJelly, drawRay, drawShark, drawWhaleShark } from './creatures';
+import { CreatureShape, P, PATH_N, RGB, drawJelly, drawRay, drawShark, drawWhaleShark, jellyPulse } from './creatures';
 
 /** 由暗到亮的字符梯度 */
 const GLYPHS = ' .:-otX%8$';
@@ -36,7 +36,6 @@ interface Creature extends CreatureShape {
   kind: Kind;
   x: number;
   y: number;
-  heading: number;
   /** 游速：体长/秒（水母为伞径/秒） */
   speed: number;
   /** 摆尾/搏动的相位推进速度，rad/s */
@@ -51,6 +50,8 @@ interface Creature extends CreatureShape {
   greetUntil: number;
   /** 保存水波触发后的加速转向游离截止时刻（秒），始终沿自身朝向游动、不硬平移 */
   boostUntil: number;
+  /** 鲨与鲸鲨：头部走过的位置（px），新的在前，只保留约一个体长 */
+  trail: P[];
   /** 上一帧实际画出的范围（px），用于点击命中 */
   box: { x0: number; y0: number; x1: number; y1: number } | null;
 }
@@ -73,19 +74,23 @@ interface Glow {
 
 /**
  * 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板，
- * reach：绘制轮廓离生物中心（x, y）的最远距离上界（体长倍数，含 creatures.ts 里的蒙版平移和摆动），用于绕行卡片的舒适轨道半径。
+ * reach：绕行卡片的舒适轨道半径系数（体长倍数）；鲨与鲸鲨的身体沿头部轨迹跟随、不会甩出轨道，所以只需容纳体宽和胸鳍。
+ * anchor：位置点 (x, y) 在本体坐标里离蒙版中心多远（体长倍数，朝 +x）。转向绕位置点旋转，所以它必须在头部或身体前段：
+ * 鲨与鲸鲨取吻端（身体沿头部轨迹跟随），蝠鲼取盘心，水母取伞罩。若取在身体中段，转向时头尾会反向甩、看起来在横滑。
+ * trail：身体是否沿头部轨迹跟随（鲨、鲸鲨）。
  * 鲨鱼的调色板按 seed 三等分取色，与 drawShark 的品种对应：前两段为尖吻鲨（灰白、蓝灰），第三段为豹纹鲨（沙棕）。
  */
 const SPECIES: Record<
   Kind,
-  { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; palette: RGB[] }
+  { size: [number, number]; speed: [number, number]; turn: number; beat: [number, number]; reach: number; anchor: number; trail: boolean; palette: RGB[] }
 > = {
   // 冰青、淡紫
-  jelly: { size: [9.5, 13.5], speed: [0.18, 0.26], turn: 0.55, beat: [1.8, 2.4], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
-  shark: { size: [48, 68], speed: [0.24, 0.34], turn: 0.6, beat: [2.4, 3.2], reach: 0.7, palette: [[190, 196, 206], [152, 158, 210], [214, 186, 140]] },
+  jelly: { size: [9.5, 13.5], speed: [0.18, 0.26], turn: 0.55, beat: [1.8, 2.4], reach: 2.6, anchor: 1.6, trail: false, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
+  // 鲨与鲸鲨的身体沿轨迹弯曲，满舵转弯时一个体长内的转角 ≈ turn / speed，鲨约 90°、鲸鲨约 80°
+  shark: { size: [48, 68], speed: [0.24, 0.34], turn: 0.5, beat: [2.4, 3.2], reach: 0.7, anchor: 0.5, trail: true, palette: [[190, 196, 206], [152, 158, 210], [214, 186, 140]] },
   // 暖金、米色、蓝灰
-  whale: { size: [46, 62], speed: [0.2, 0.28], turn: 0.5, beat: [1.9, 2.5], reach: 0.68, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
-  ray: { size: [20, 30], speed: [0.3, 0.38], turn: 0.75, beat: [2.0, 2.7], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
+  whale: { size: [46, 62], speed: [0.2, 0.28], turn: 0.35, beat: [1.9, 2.5], reach: 0.68, anchor: 0.5, trail: true, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
+  ray: { size: [20, 30], speed: [0.3, 0.38], turn: 0.9, beat: [2.0, 2.7], reach: 1.12, anchor: 0.43, trail: false, palette: [[150, 170, 205], [180, 172, 210]] },
 };
 
 const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void> = {
@@ -355,6 +360,8 @@ export class Ocean {
       ink: `rgb(${hue.map((v) => Math.round(v + (255 - v) * 0.45)).join(',')})`,
       tx: 0,
       ty: 0,
+      path: [],
+      trail: [],
       greetUntil: 0,
       boostUntil: 0,
       box: null,
@@ -429,8 +436,8 @@ export class Ocean {
 
     // 摆尾/搏动频率保持在自然区间，水波游离时略微加快拍尾
     c.phase += dt * c.beat * (1 + 0.5 * boost);
-    // 水母伞盖收缩时推进、舒张时滑行（系数均值约 1）
-    const k = c.kind === 'jelly' ? 0.55 + 1.4 * Math.max(0, Math.sin(c.phase)) : 1;
+    // 水母一抽一抽地喷水推进：收缩时猛冲、舒张时滑行减速（系数周期均值为 1）
+    const k = c.kind === 'jelly' ? jellyPulse(c.phase).thrust : 1;
     // 被点中时原地停顿（身体照常摆动）
     if (greeting) return;
 
@@ -438,6 +445,63 @@ export class Ocean {
     const step = v * pace * (1 + 0.9 * boost) * k * dt;
     c.x += Math.cos(c.heading) * step;
     c.y += Math.sin(c.heading) * step;
+    if (spec.trail) this.record(c);
+  }
+
+  /** 记下头部位置：每移动约 1/4 格存一个点，超出一个体长（再留一点余量）的旧点丢掉 */
+  private record(c: Creature): void {
+    const tr = c.trail;
+    const last = tr[0];
+    if (last && Math.hypot(c.x - last.x, c.y - last.y) < this.cell * 0.25) return;
+    tr.unshift({ x: c.x, y: c.y });
+    let len = 0;
+    for (let i = 1; i < tr.length; i++) {
+      len += Math.hypot(tr[i].x - tr[i - 1].x, tr[i].y - tr[i - 1].y);
+      if (len > c.size * this.cell * 1.1) {
+        tr.length = i + 1;
+        return;
+      }
+    }
+  }
+
+  /** 沿头部轨迹按体长等分取 PATH_N + 1 个点，换算到以 (ox, oy) 为中心、朝 heading 的本体坐标（格）。
+   *  轨迹不够长（刚生成、网格变密）时，从轨迹末端沿最后一段的方向直线延长 */
+  private bodyPath(c: Creature, ox: number, oy: number): P[] {
+    const pts: P[] = [{ x: c.x, y: c.y }, ...c.trail];
+    const step = (c.size * this.cell) / PATH_N;
+    const out: P[] = [];
+    let seg = 0;
+    // 当前所在线段的起点到终点：pts[seg] → pts[seg + 1]，walked 为 pts[seg] 处已走过的弧长
+    let walked = 0;
+    for (let k = 0; k <= PATH_N; k++) {
+      const want = k * step;
+      while (seg < pts.length - 1) {
+        const d = Math.hypot(pts[seg + 1].x - pts[seg].x, pts[seg + 1].y - pts[seg].y);
+        if (walked + d >= want && d > 0) break;
+        walked += d;
+        seg++;
+      }
+      let p: P;
+      if (seg < pts.length - 1) {
+        const a = pts[seg];
+        const b = pts[seg + 1];
+        const f = (want - walked) / Math.hypot(b.x - a.x, b.y - a.y);
+        p = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+      } else {
+        const a = pts[pts.length - 1];
+        const prev = pts.length > 1 ? pts[pts.length - 2] : { x: a.x + Math.cos(c.heading), y: a.y + Math.sin(c.heading) };
+        const d = Math.hypot(a.x - prev.x, a.y - prev.y) || 1;
+        p = { x: a.x + ((a.x - prev.x) / d) * (want - walked), y: a.y + ((a.y - prev.y) / d) * (want - walked) };
+      }
+      out.push(p);
+    }
+    const cos = Math.cos(c.heading);
+    const sin = Math.sin(c.heading);
+    return out.map((p) => {
+      const dx = (p.x - ox) / this.cell;
+      const dy = (p.y - oy) / this.cell;
+      return { x: dx * cos + dy * sin, y: dy * cos - dx * sin };
+    });
   }
 
   private render(): void {
@@ -565,11 +629,17 @@ export class Ocean {
     ctx.globalAlpha = 1;
   }
 
-  /** 画一帧带色光照蒙版：按亚格小数平移，格子前沿逐渐变亮、尾部逐渐变暗，不再整只一下跳一格 */
+  /** 画一帧带色光照蒙版：按亚格小数平移，格子前沿逐渐变亮、尾部逐渐变暗，不再整只一下跳一格。
+   *  蒙版中心在位置点后方 anchor 个体长处 */
   private paintMask(c: Creature): Sample {
     const m = this.mask;
-    const gx = c.x / this.cell;
-    const gy = c.y / this.cell;
+    const spec = SPECIES[c.kind];
+    const back = spec.anchor * c.size * this.cell;
+    const ox = c.x - Math.cos(c.heading) * back;
+    const oy = c.y - Math.sin(c.heading) * back;
+    if (spec.trail) c.path = this.bodyPath(c, ox, oy);
+    const gx = ox / this.cell;
+    const gy = oy / this.cell;
     const cx = MASK / 2 + gx - Math.floor(gx);
     const cy = MASK / 2 + gy - Math.floor(gy);
     m.setTransform(1, 0, 0, 1, 0, 0);
