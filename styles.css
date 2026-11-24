@@ -1,0 +1,566 @@
+/* 潜思：配色硬编码为深海深色，不随 Obsidian 主题变化 */
+.workspace-leaf-content[data-type='abyssal-jot-view'] .view-content.abyssal-jot {
+  padding: 0;
+}
+
+.abyssal-jot {
+  position: relative;
+  overflow: hidden;
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.9);
+  background-color: #06080c;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+  /* 网格间距与背景生物的格子一致，随「网格密度」切换 */
+  background-size: var(--abyssal-jot-cell, 10px) var(--abyssal-jot-cell, 10px);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+.abyssal-jot-ocean,
+.abyssal-jot-fx {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.abyssal-jot-ocean {
+  z-index: 0;
+}
+
+.abyssal-jot-fx {
+  z-index: 2;
+}
+
+.abyssal-jot-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 8vh;
+  pointer-events: none;
+}
+
+.abyssal-jot-stage > * {
+  pointer-events: auto;
+}
+
+.abyssal-jot .abyssal-jot-title {
+  margin: 0 0 22px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  font-size: 40px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.abyssal-jot-card {
+  position: relative;
+  width: min(560px, 86%);
+  padding: 14px 18px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  background: rgba(16, 19, 26, 0.5);
+  backdrop-filter: blur(10px) saturate(1.2);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.abyssal-jot .abyssal-jot-input,
+.abyssal-jot-flyaway {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  /* 固定 4 行高，超出在卡内滚动 */
+  height: calc(14px * 1.75 * 4 + 12px);
+  padding: 6px 2px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.abyssal-jot .abyssal-jot-input {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  caret-color: #f9a8d4;
+  resize: none;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.abyssal-jot .abyssal-jot-input::-webkit-scrollbar {
+  display: none;
+}
+
+.abyssal-jot .abyssal-jot-input:focus {
+  box-shadow: none;
+  border: none;
+}
+
+/* 只有内容向上滚出时才给顶部加渐隐，避免第一行被淡化 */
+.abyssal-jot .abyssal-jot-input.is-scrolled {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 24px);
+}
+
+.abyssal-jot .abyssal-jot-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.abyssal-jot-flyaway {
+  position: absolute;
+  top: 14px;
+  left: 18px;
+  width: calc(100% - 36px);
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+  animation: abyssal-jot-fly 700ms ease-out forwards;
+}
+
+@keyframes abyssal-jot-fly {
+  to {
+    transform: translateY(-36px);
+    opacity: 0;
+    filter: blur(3px);
+  }
+}
+
+.abyssal-jot-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.abyssal-jot-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.abyssal-jot-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.abyssal-jot button.abyssal-jot-chip,
+.abyssal-jot button.abyssal-jot-send,
+.abyssal-jot button.abyssal-jot-pause {
+  box-shadow: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.abyssal-jot button.abyssal-jot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+
+.abyssal-jot button.abyssal-jot-chip svg {
+  width: 12px;
+  height: 12px;
+}
+
+.abyssal-jot button.abyssal-jot-chip.is-active {
+  border-color: rgba(165, 180, 252, 0.5);
+  background: rgba(165, 180, 252, 0.12);
+  color: #c7d2fe;
+}
+
+.abyssal-jot button.abyssal-jot-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.abyssal-jot button.abyssal-jot-send svg {
+  width: 14px;
+  height: 14px;
+}
+
+.abyssal-jot button.abyssal-jot-chip:hover,
+.abyssal-jot button.abyssal-jot-send:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.abyssal-jot-status {
+  min-height: 18px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  opacity: 0;
+}
+
+.abyssal-jot-status.is-visible {
+  animation: abyssal-jot-status 3s ease forwards;
+}
+
+@keyframes abyssal-jot-status {
+  10%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.abyssal-jot button.abyssal-jot-pause {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  z-index: 3;
+  height: auto;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 11px;
+}
+
+.abyssal-jot button.abyssal-jot-pause:hover {
+  color: rgba(255, 255, 255, 0.7);
+  background: transparent;
+}
+
+/* 测量光标位置用的镜像，不可见 */
+.abyssal-jot-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+
+/* 左上 History 按钮 */
+.abyssal-jot button.abyssal-jot-history-btn {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(16, 19, 26, 0.5);
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.abyssal-jot button.abyssal-jot-history-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.abyssal-jot button.abyssal-jot-history-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.abyssal-jot .abyssal-jot-history-btn-count {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* 输入卡底栏左侧「+ 关联一个旧想法」 */
+.abyssal-jot button.abyssal-jot-link {
+  height: auto;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.45);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.abyssal-jot button.abyssal-jot-link:hover {
+  color: #c7d2fe;
+  background: transparent;
+}
+
+.abyssal-jot-card > .abyssal-jot-hint {
+  margin-top: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.28);
+}
+
+/* 历史抽屉 */
+.abyssal-jot .abyssal-jot-history {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 4;
+  width: 320px;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  border-right: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(16, 19, 26, 0.72);
+  backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 20px 0 60px rgba(0, 0, 0, 0.45);
+  transform: translateX(-102%);
+  transition: transform 220ms ease;
+  pointer-events: none;
+}
+
+.abyssal-jot .abyssal-jot-history.is-open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.abyssal-jot .abyssal-jot-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.abyssal-jot .abyssal-jot-history-title {
+  font-size: 15px;
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.abyssal-jot .abyssal-jot-history-count {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.abyssal-jot .abyssal-jot-history-close {
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 18px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+}
+
+.abyssal-jot .abyssal-jot-history-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #c7d2fe;
+}
+
+.abyssal-jot .abyssal-jot-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.abyssal-jot .abyssal-jot-history-empty {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.abyssal-jot .abyssal-jot-history-item {
+  padding: 10px 10px 8px;
+  border-radius: 10px;
+}
+
+.abyssal-jot .abyssal-jot-history-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.abyssal-jot .abyssal-jot-history-time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(165, 180, 252, 0.7);
+}
+
+.abyssal-jot .abyssal-jot-history-summary {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+  overflow-wrap: anywhere;
+}
+
+.abyssal-jot .abyssal-jot-history-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.abyssal-jot .abyssal-jot-history-item:hover .abyssal-jot-history-actions,
+.abyssal-jot .abyssal-jot-history-actions:focus-within {
+  opacity: 1;
+}
+
+.abyssal-jot .abyssal-jot-history-action {
+  height: auto;
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+}
+
+.abyssal-jot .abyssal-jot-history-action:hover {
+  border-color: rgba(165, 180, 252, 0.4);
+  background: rgba(165, 180, 252, 0.08);
+  color: #c7d2fe;
+}
+
+/* 左下提示 */
+.abyssal-jot-tip {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  z-index: 3;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  pointer-events: none;
+}
+
+/* 右上：生物组合、网格密度 */
+.abyssal-jot-controls {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+}
+
+.abyssal-jot select.abyssal-jot-select {
+  height: 26px;
+  padding: 0 24px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background-color: rgba(16, 19, 26, 0.5);
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.abyssal-jot select.abyssal-jot-select:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.abyssal-jot select.abyssal-jot-select option {
+  background: #10131a;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* 点生物浮出的旧想法气泡 */
+.abyssal-jot-echo {
+  position: absolute;
+  z-index: 3;
+  width: 260px;
+  box-sizing: border-box;
+  padding: 12px 14px 10px;
+  border: 1px solid rgba(165, 180, 252, 0.25);
+  border-radius: 14px;
+  background: rgba(16, 19, 26, 0.72);
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: 0 0 40px rgba(165, 180, 252, 0.12), 0 16px 40px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  transition: opacity 220ms ease, transform 220ms ease;
+  pointer-events: none;
+}
+
+.abyssal-jot-echo.is-visible {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.abyssal-jot-echo-why {
+  font-size: 11px;
+  color: #c7d2fe;
+}
+
+.abyssal-jot-echo-time {
+  margin-top: 2px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.abyssal-jot-echo-text {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.88);
+  overflow-wrap: anywhere;
+}
+
+.abyssal-jot-echo-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.abyssal-jot .abyssal-jot-echo-actions button {
+  height: auto;
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+}
+
+.abyssal-jot .abyssal-jot-echo-actions button:hover {
+  border-color: rgba(165, 180, 252, 0.4);
+  background: rgba(165, 180, 252, 0.08);
+  color: #c7d2fe;
+}

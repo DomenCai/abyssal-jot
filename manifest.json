@@ -1,0 +1,9 @@
+{
+  "id": "abyssal-jot",
+  "name": "潜思 Abyssal Jot",
+  "version": "0.1.0",
+  "minAppVersion": "1.12.0",
+  "description": "深海沉浸式随手记：像素水母与鲨鱼在身后游动，一句话也值得留下。",
+  "author": "caidongmeng",
+  "isDesktopOnly": true
+}
