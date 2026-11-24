@@ -8,7 +8,7 @@ import { CreatureShape, RGB, drawFishSchool, drawJelly, drawRay, drawShark, draw
 /** 由暗到亮的字符梯度 */
 const GLYPHS = ' .:-otX%8$';
 /** 蒙版边长（格），需容纳最大的生物 */
-const MASK = 96;
+const MASK = 160;
 /** 点中生物后停顿发光的时长（秒） */
 const GREET_S = 1.2;
 /** 停止打字后，跟随卡片的生物再停留多久才恢复漫游（秒） */
@@ -88,7 +88,7 @@ const SPECIES: Record<
   // 冰青、淡紫
   jelly: { size: [6, 8.5], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
   // 米色、蓝灰、暖金
-  shark: { size: [24, 34], speed: [0.45, 0.6], turn: 1, beat: [4.5, 6.5], reach: 0.5, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
+  shark: { size: [84, 119], speed: [0.13, 0.17], turn: 1, beat: [4.5, 6.5], reach: 0.5, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
   // 暖金、米色、蓝灰
   whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], reach: 0.5, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
   ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
