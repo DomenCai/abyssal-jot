@@ -11,6 +11,8 @@ export interface CreatureShape {
   seed: number;
   /** 归一化色相：最亮通道 = 255 */
   hue: RGB;
+  /** 转弯带来的身体弯曲，-1~1，正值朝 +y（游向的右侧）弯成 C 形 */
+  bend: number;
 }
 
 type P = { x: number; y: number };
@@ -54,6 +56,9 @@ function layeredBody(m: CanvasRenderingContext2D, pts: P[], widths: number[], hu
     m.fill();
   }
 }
+
+/** 脊柱点 p、朝头单位切向量 t 的局部坐标 → 蒙版坐标：along 沿头向，side 朝 +y 一侧 */
+const local = (p: P, t: P, along: number, side: number): P => ({ x: p.x + t.x * along - t.y * side, y: p.y + t.y * along + t.x * side });
 
 /** 一对向后外侧展开的三角鳍；out 为翼尖到脊柱的横向距离（格） */
 function finPair(m: CanvasRenderingContext2D, p: P, t: P, L: number, back: number, out: number, root: number, color: string): void {
@@ -161,70 +166,144 @@ export function drawJelly(m: CanvasRenderingContext2D, c: CreatureShape): void {
   m.fill();
 }
 
-/** 鲨（俯视）：朝 +x，脊柱从头到尾做振幅递增的正弦摆动。seed < 0.5 为双髻鲨（锤头），否则为尖吻流线型 */
+/** 鲨的身体分层：中脊高光收一档，给背鳍亮棱留出对比 */
+const SHARK_LAYERS: [number, number][] = [
+  [1, 0.3],
+  [0.75, 0.47],
+  [0.5, 0.62],
+  [0.22, 0.78],
+];
+
+/** 镰刀形成对鳍：前缘外凸、后缘内凹、鳍尖尖锐；鳍根在脊柱上，由身体盖住。back / out / root 为体长倍数 */
+function sickleFins(m: CanvasRenderingContext2D, p: P, t: P, L: number, back: number, out: number, root: number, color: string): void {
+  m.fillStyle = color;
+  for (const side of [-1, 1]) {
+    const at = (a: number, s: number) => local(p, t, a * L, side * s * L);
+    const front = at(root / 2, 0);
+    const tip = at(-back, out);
+    const lead = at(-back * 0.05, out * 0.75);
+    const trail = at(-back * 0.45, out * 0.6);
+    const rear = at(-root / 2, 0);
+    m.beginPath();
+    m.moveTo(front.x, front.y);
+    m.quadraticCurveTo(lead.x, lead.y, tip.x, tip.y);
+    m.quadraticCurveTo(trail.x, trail.y, rear.x, rear.y);
+    m.closePath();
+    m.fill();
+  }
+}
+
+/** 鲨（俯视）：朝 +x。seed < 2/3 为尖吻鲨（镰刀形长胸鳍，ocean.ts 再按 seed 分灰、蓝两种配色），否则为豹纹鲨（钝头更粗壮、背上深色斑块）。
+ *  轮廓为圆钝吻部 → 胸部最宽 → 尾柄收细 → 上长下短的新月尾鳍；
+ *  背鳍俯视是脊线上一道亮棱加一侧阴影；游动为振幅向尾部递增的行波，转弯时整条身体弯成 C 形。 */
 export function drawShark(m: CanvasRenderingContext2D, c: CreatureShape): void {
   const L = c.size;
   const hue = c.hue;
-  const hammer = c.seed < 0.5;
-  const N = 16;
-  const amp = L * 0.08;
-  // 体宽轮廓（俯视最宽处约为体长的 0.2，与真实鲨鱼相近）：双髻鲨颈部窄、胸部最宽；尖吻鲨从吻尖迅速变宽，体型更粗壮
-  const width = hammer
-    ? (s: number) => L * (s < 0.3 ? 0.08 + (s / 0.3) * 0.1 : 0.16 * Math.pow(1 - (s - 0.3) / 0.7, 1.15) + 0.02)
-    : (s: number) => L * (s < 0.3 ? 0.21 * Math.pow(s / 0.3, 0.55) + 0.02 : 0.21 * Math.pow(1 - (s - 0.3) / 0.7, 1.1) + 0.02);
+  const leopard = c.seed >= 2 / 3;
+  const N = 32;
+  // 体宽：最宽处占体长 W，位于 sm；吻部圆钝指数 p（越小越钝），向尾收细指数 q（越小后半身越饱满）；尾柄宽为最宽处的 0.14
+  const [W, sm, p, q] = leopard ? [0.25, 0.3, 0.4, 1.1] : [0.21, 0.32, 0.5, 1.2];
+  const width = (s: number) => L * W * (s < sm ? Math.pow(s / sm, p) : 0.14 + 0.86 * Math.pow(1 - (s - sm) / (1 - sm), q));
+  const amp = L * 0.06;
   const pts: P[] = [];
   const widths: number[] = [];
   for (let i = 0; i <= N; i++) {
     const s = i / N;
-    pts.push({ x: L * (0.5 - s), y: amp * Math.pow(s, 1.6) * Math.sin(c.phase - s * 5.5) });
+    // 行波：头部轻微摆头、振幅向尾部递增；弯曲以胸鳍附近为支点，头尾都偏向转弯内侧
+    pts.push({ x: L * (0.5 - s), y: amp * (0.12 + Math.pow(s, 1.5)) * Math.sin(c.phase - s * 5) + c.bend * L * 0.32 * (s - 0.3) ** 2 });
     widths.push(width(s));
   }
   const ts = tangents(pts);
+  const at = (s: number) => Math.round(s * N);
 
-  // 鳍比身体暗，先画，被身体盖住根部
-  const fin = (i: number, back: number, out: number, level: number) =>
-    finPair(m, pts[i], ts[i], L, back, out * L, L * 0.1, shade(hue, level));
-  if (hammer) fin(5, 0.18, 0.24, 0.34);
-  else fin(5, 0.22, 0.3, 0.36);
-  fin(11, 0.07, 0.09, 0.28);
+  // 胸鳍、腹鳍比身体暗，先画，鳍根被身体盖住。胸鳍 [位置, 后掠, 外展, 鳍根长]
+  const [ps, pb, po, pr] = leopard ? [0.27, 0.16, 0.25, 0.12] : [0.28, 0.23, 0.28, 0.1];
+  sickleFins(m, pts[at(ps)], ts[at(ps)], L, pb, po, pr, shade(hue, 0.4));
+  sickleFins(m, pts[at(0.6)], ts[at(0.6)], L, 0.07, width(0.6) / L / 2 + 0.04, 0.05, shade(hue, 0.34));
 
-  // 叉形尾鳍：上叶长、下叶短，画成有宽度的三角叶片（线条放大后会显得过细）
+  // 新月尾鳍：上叶长、下叶短，前缘外凸、后缘内凹，两叶在尾叉处汇合
   const tail = pts[N];
   const tt = ts[N];
-  const base = L * 0.035;
+  const tl = (a: number, s: number) => local(tail, tt, a * L, s * L);
   m.fillStyle = shade(hue, 0.42);
   for (const [back, out] of [
-    [0.2, 0.14],
-    [0.12, -0.09],
+    [0.17, 0.1],
+    [0.1, -0.075],
   ]) {
+    const base = tl(0.05, 0);
+    const lead = tl(-back * 0.2, out * 0.85);
+    const tip = tl(-back, out);
+    const trail = tl(-back * 0.45, out * 0.4);
+    const fork = tl(-0.045, 0);
     m.beginPath();
-    m.moveTo(tail.x + tt.x * base - tt.y * base * Math.sign(out), tail.y + tt.y * base + tt.x * base * Math.sign(out));
-    m.lineTo(tail.x - tt.x * back * L - tt.y * out * L, tail.y - tt.y * back * L + tt.x * out * L);
-    m.lineTo(tail.x - tt.x * base, tail.y - tt.y * base);
+    m.moveTo(base.x, base.y);
+    m.quadraticCurveTo(lead.x, lead.y, tip.x, tip.y);
+    m.quadraticCurveTo(trail.x, trail.y, fork.x, fork.y);
     m.closePath();
     m.fill();
   }
 
-  layeredBody(m, pts, widths, hue);
+  layeredBody(m, pts, widths, hue, SHARK_LAYERS);
 
-  if (!hammer) return;
-  // 锤头：外缘暗、中线亮；两端的眼睛
-  const head = pts[0];
-  const ht = ts[0];
-  const angle = Math.atan2(ht.y, ht.x);
-  for (const [rx, ry, level] of [
-    [0.045, 0.16, 0.4],
-    [0.022, 0.12, 0.68],
-  ]) {
-    m.fillStyle = shade(hue, level);
-    m.beginPath();
-    m.ellipse(head.x, head.y, L * rx, L * ry, angle, 0, Math.PI * 2);
-    m.fill();
+  // 豹纹鲨：背上散布深色斑块，位置随 seed 固定、跟着脊柱摆动
+  if (leopard) {
+    const rnd = mulberry32(c.seed);
+    m.fillStyle = shade(hue, 0.3);
+    for (let k = 0; k < 28; k++) {
+      const s = 0.12 + rnd() * 0.7;
+      const i = at(s);
+      const pt = local(pts[i], ts[i], 0, (rnd() - 0.5) * 0.8 * widths[i]);
+      m.beginPath();
+      m.arc(pt.x, pt.y, L * (0.007 + rnd() * 0.009), 0, Math.PI * 2);
+      m.fill();
+    }
   }
-  m.fillStyle = shade(hue, 1);
-  for (const side of [-1, 1]) {
+
+  // 鳃裂：头后两侧各 5 道短暗纹
+  m.strokeStyle = shade(hue, 0.26);
+  m.lineWidth = Math.max(0.5, L * 0.005);
+  for (let k = 0; k < 5; k++) {
+    const i = at(0.17 + k * 0.016);
+    for (const side of [-1, 1]) {
+      const a = local(pts[i], ts[i], 0, side * widths[i] * 0.28);
+      const b = local(pts[i], ts[i], -L * 0.008, side * widths[i] * 0.46);
+      m.beginPath();
+      m.moveTo(a.x, a.y);
+      m.lineTo(b.x, b.y);
+      m.stroke();
+    }
+  }
+
+  // 背鳍：俯视只见一道亮棱，旁边一条阴影
+  const ridge = (s0: number, s1: number, w: number) => {
+    const a = at(s0);
+    const b = at(s1);
+    m.fillStyle = shade(hue, 0.3);
     m.beginPath();
-    m.arc(head.x - ht.y * side * L * 0.15, head.y + ht.x * side * L * 0.15, Math.max(0.7, L * 0.012), 0, Math.PI * 2);
+    for (let i = a; i <= b; i++) {
+      const f = (i - a) / (b - a);
+      const pt = local(pts[i], ts[i], 0, w * L * Math.sin(Math.PI * Math.pow(f, 0.6)) + 0.4);
+      m.lineTo(pt.x, pt.y);
+    }
+    for (let i = b; i >= a; i--) m.lineTo(pts[i].x, pts[i].y);
+    m.closePath();
+    m.fill();
+    m.strokeStyle = shade(hue, 1);
+    m.lineWidth = Math.max(0.8, w * L * 0.6);
+    m.beginPath();
+    for (let i = a; i <= b; i++) m.lineTo(pts[i].x, pts[i].y);
+    m.stroke();
+  };
+  ridge(leopard ? 0.37 : 0.35, 0.5, 0.022);
+  ridge(0.7, 0.77, 0.009);
+
+  // 眼睛：头部两侧的暗点
+  m.fillStyle = shade(hue, 0.1);
+  const i = at(0.075);
+  for (const side of [-1, 1]) {
+    const pt = local(pts[i], ts[i], 0, side * widths[i] * 0.4);
+    m.beginPath();
+    m.arc(pt.x, pt.y, Math.max(0.6, L * 0.009), 0, Math.PI * 2);
     m.fill();
   }
 }
@@ -385,40 +464,85 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/** 小鱼群：5~8 条纺锤形小鱼松散聚成一团，整体朝 +x，队形仅由 seed 决定 */
-export function drawFishSchool(m: CanvasRenderingContext2D, c: CreatureShape): void {
-  const rnd = mulberry32(c.seed);
-  const hue = c.hue;
-  const n = 5 + Math.floor(rnd() * 4);
-  for (let i = 0; i < n; i++) {
-    // 队形：半径 ≤ 3.2 倍体长的圆盘内均匀散布
-    const ang = rnd() * Math.PI * 2;
-    const r = Math.sqrt(rnd()) * c.size * 3.2;
-    const len = c.size * (0.85 + rnd() * 0.3);
-    const ph = rnd() * Math.PI * 2;
-    // 极小的随相位漂移，幅度 0.3 倍体长（每轴）
-    const x = Math.cos(ang) * r + Math.sin(c.phase * 0.5 + ph) * c.size * 0.3;
-    const y = Math.sin(ang) * r + Math.cos(c.phase * 0.4 + ph * 1.7) * c.size * 0.3;
-    const swing = Math.sin(c.phase * 2.5 + ph) * len * 0.16;
+/** 一条侧视小鱼，单位坐标（体长 = 1，朝 +x）：纺锤身 + 背鳍 + 腹鳍 + 叉尾 + 银色侧线 + 眼睛。
+ *  侧视看不到左右摆尾，用尾鳍前后伸缩表现拍水 */
+function drawFish(m: CanvasRenderingContext2D, hue: RGB, phase: number): void {
+  const k = 0.75 + 0.25 * Math.cos(phase);
+  const lift = Math.sin(phase) * 0.03;
+  // 鳍和尾只比身体略暗：格子化后剪影靠它们撑起来，太暗会被吃掉
+  m.fillStyle = shade(hue, 0.6);
+  m.beginPath();
+  m.moveTo(-0.28, -0.05);
+  m.lineTo(-0.32 - 0.2 * k, -0.24 + lift);
+  m.lineTo(-0.36 - 0.06 * k, -0.2 + lift);
+  m.lineTo(-0.34 - 0.04 * k, lift * 0.5);
+  m.lineTo(-0.36 - 0.06 * k, 0.2 + lift);
+  m.lineTo(-0.32 - 0.2 * k, 0.24 + lift);
+  m.lineTo(-0.28, 0.05);
+  m.closePath();
+  m.fill();
+  // 背鳍、腹鳍
+  m.beginPath();
+  m.moveTo(0.12, -0.13);
+  m.lineTo(-0.06, -0.27);
+  m.lineTo(-0.13, -0.1);
+  m.closePath();
+  m.fill();
+  m.fillStyle = shade(hue, 0.5);
+  m.beginPath();
+  m.moveTo(0.02, 0.11);
+  m.lineTo(-0.08, 0.23);
+  m.lineTo(-0.15, 0.1);
+  m.closePath();
+  m.fill();
+  // 身体：背部弧线比腹部更隆起
+  m.fillStyle = shade(hue, 0.7);
+  m.beginPath();
+  m.moveTo(0.5, 0.01);
+  m.bezierCurveTo(0.42, -0.14, 0.12, -0.18, -0.05, -0.15);
+  m.bezierCurveTo(-0.18, -0.12, -0.26, -0.06, -0.32, -0.04);
+  m.lineTo(-0.32, 0.04);
+  m.bezierCurveTo(-0.24, 0.07, -0.15, 0.12, -0.02, 0.13);
+  m.bezierCurveTo(0.14, 0.14, 0.42, 0.11, 0.5, 0.01);
+  m.fill();
+  // 银色侧线
+  m.fillStyle = shade(hue, 0.95);
+  m.beginPath();
+  m.ellipse(0.02, -0.01, 0.34, 0.045, 0, 0, Math.PI * 2);
+  m.fill();
+  // 鳃盖弧线、眼睛
+  m.strokeStyle = shade(hue, 0.3);
+  m.lineWidth = 0.05;
+  m.beginPath();
+  m.arc(0.2, 0, 0.12, -0.9, 0.9);
+  m.stroke();
+  m.fillStyle = shade(hue, 0.08);
+  m.beginPath();
+  m.arc(0.35, -0.04, 0.055, 0, Math.PI * 2);
+  m.fill();
+}
 
-    // 小三角尾鳍，尾端随相位左右摆
-    m.fillStyle = shade(hue, 0.38);
-    m.beginPath();
-    m.moveTo(x - len * 0.42, y);
-    m.lineTo(x - len * 0.75, y + swing - len * 0.2);
-    m.lineTo(x - len * 0.75, y + swing + len * 0.2);
-    m.closePath();
-    m.fill();
-    // 纺锤形身体：边缘暗 → 体侧 → 背脊高光
-    for (const [dx, rx, ry, level] of [
-      [0, 0.5, 0.2, 0.32],
-      [0.04, 0.38, 0.13, 0.6],
-      [0.1, 0.22, 0.07, 0.95],
-    ]) {
-      m.fillStyle = shade(hue, level);
-      m.beginPath();
-      m.ellipse(x + len * dx, y, len * rx, len * ry, 0, 0, Math.PI * 2);
-      m.fill();
-    }
+/** 小鱼群：3~5 条侧视小鱼松散同游，整体朝 +x，队形仅由 seed 决定。
+ *  侧视的鱼不能肚皮朝上游：朝向偏左（蒙版变换的 a = cos(朝向) < 0）时上下翻转，保持背鳍朝上 */
+export function drawFishSchool(m: CanvasRenderingContext2D, c: CreatureShape): void {
+  if (m.getTransform().a < 0) m.scale(1, -1);
+  const rnd = mulberry32(c.seed);
+  const n = 3 + Math.floor(rnd() * 3);
+  for (let i = 0; i < n; i++) {
+    // 队形：横向 2.2 倍体长、纵向 1.3 倍体长的椭圆内散布，加一点随相位的漂移和各自的俯仰（俯仰收小，侧视轮廓不歪）
+    const ang = rnd() * Math.PI * 2;
+    const r = Math.sqrt(rnd());
+    const len = c.size * (0.8 + rnd() * 0.35);
+    const ph = rnd() * Math.PI * 2;
+    const tilt = (rnd() - 0.5) * 0.16;
+    m.save();
+    m.translate(
+      Math.cos(ang) * r * c.size * 2.2 + Math.sin(c.phase * 0.3 + ph) * c.size * 0.15,
+      Math.sin(ang) * r * c.size * 1.3 + Math.cos(c.phase * 0.25 + ph * 1.7) * c.size * 0.12,
+    );
+    m.rotate(tilt + Math.sin(c.phase * 0.2 + ph) * 0.06);
+    m.scale(len, len);
+    drawFish(m, c.hue, c.phase + ph);
+    m.restore();
   }
 }

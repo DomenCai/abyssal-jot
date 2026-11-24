@@ -79,7 +79,9 @@ interface Glow {
  * 每种生物的参数：尺寸（格）、游速（体长/秒）、最大角速度（rad/s）、摆尾/搏动频率（rad/s）、调色板，
  * reach：绘制轮廓离生物中心（x, y）的最远距离上界（体长倍数，含 creatures.ts 里的蒙版平移和摆动），跟随卡片时据此留安全边距。
  * 水母整体前移 (3.6 - 伞宽) / 2 倍伞径：伞盖前缘最远 2.35，触手末端连同摆动和线宽最远约 2.5，取 2.6；
- * 鲨鱼连尾鳍叶片约 0.7、鲸鲨身体半长 0.5；蝠鲼整体前移 0.45：头鳍尖约 1.05、翼尖约 1.04，加线宽取 1.12；小鱼群散布半径约 3.2（不参与跟随）。
+ * 鲨鱼连尾鳍叶片约 0.7、鲸鲨身体半长 0.5；蝠鲼整体前移 0.45：头鳍尖约 1.05、翼尖约 1.04，加线宽取 1.12；小鱼群散布半径约 2.2，加半条鱼取 2.7（不参与跟随）。
+ * 鲨鱼的调色板按 seed 三等分取色，与 drawShark 的品种对应：前两段为尖吻鲨（灰白、蓝灰），第三段为豹纹鲨（沙棕）。
+ * 鲨鱼转向放慢到 0.35 rad/s：转弯半径约半个体长，配合身体弯曲，不再原地打转。
  */
 const SPECIES: Record<
   Kind,
@@ -87,12 +89,11 @@ const SPECIES: Record<
 > = {
   // 冰青、淡紫
   jelly: { size: [6, 8.5], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.6], reach: 2.6, palette: [[170, 225, 240], [195, 175, 240], [170, 165, 240]] },
-  // 米色、蓝灰、暖金
-  shark: { size: [84, 119], speed: [0.13, 0.17], turn: 1, beat: [4.5, 6.5], reach: 0.7, palette: [[205, 194, 172], [152, 158, 210], [190, 196, 206], [218, 180, 124]] },
+  shark: { size: [84, 119], speed: [0.13, 0.17], turn: 0.35, beat: [4.5, 6.5], reach: 0.7, palette: [[190, 196, 206], [152, 158, 210], [214, 186, 140]] },
   // 暖金、米色、蓝灰
   whale: { size: [32, 44], speed: [0.25, 0.35], turn: 0.8, beat: [2, 2.8], reach: 0.5, palette: [[222, 192, 132], [210, 196, 168], [140, 160, 195]] },
   ray: { size: [18, 28], speed: [0.32, 0.38], turn: 0.9, beat: [2.2, 3], reach: 1.12, palette: [[150, 170, 205], [180, 172, 210]] },
-  fish: { size: [4, 6], speed: [2, 2.8], turn: 1.2, beat: [5.5, 6.5], reach: 3.2, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
+  fish: { size: [18, 24], speed: [0.55, 0.7], turn: 1.2, beat: [5.5, 6.5], reach: 2.7, palette: [[200, 210, 225], [180, 170, 230], [160, 200, 215]] },
 };
 
 const DRAW: Record<Kind, (m: CanvasRenderingContext2D, c: CreatureShape) => void> = {
@@ -352,7 +353,8 @@ export class Ocean {
   private create(kind: Kind): Creature {
     const spec = SPECIES[kind];
     const depth = rand(0.45, 1);
-    const color = pick(spec.palette);
+    const seed = Math.random();
+    const color = kind === 'shark' ? spec.palette[Math.floor(seed * spec.palette.length)] : pick(spec.palette);
     const top = Math.max(...color);
     const hue = color.map((v) => (v * 255) / top) as RGB;
     const c: Creature = {
@@ -365,8 +367,9 @@ export class Ocean {
       phase: rand(0, Math.PI * 2),
       size: rand(...spec.size) * (0.6 + depth * 0.4),
       depth,
-      seed: Math.random(),
+      seed,
       hue,
+      bend: 0,
       ink: `rgb(${hue.map((v) => Math.round(v + (255 - v) * 0.45)).join(',')})`,
       tx: 0,
       ty: 0,
@@ -391,8 +394,8 @@ export class Ocean {
     const greeting = c.greetUntil > this.t;
     // 体长/秒 → px/s：换网格密度时相对体长的游速不变
     const v = c.speed * c.size * this.cell * (c.kind === 'jelly' ? 2 : 1);
-    // 约 1.5 秒路程内算到达（大于转弯半径，不会绕着目标打转）
-    const reach = v * 1.5;
+    // 约 1.5 秒路程内算到达；转得慢的放宽到转弯半径（v / turn）的 1.2 倍，不会绕着目标打转
+    const reach = v * Math.max(1.5, 1.2 / SPECIES[c.kind].turn);
     if ((c.tx - c.x) ** 2 + (c.ty - c.y) ** 2 < reach * reach) this.retarget(c);
     let ax = c.tx;
     let ay = c.ty;
@@ -424,6 +427,9 @@ export class Ocean {
     diff = Math.atan2(Math.sin(diff), Math.cos(diff));
     const maxTurn = SPECIES[c.kind].turn * dt;
     if (!greeting) c.heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+    // 身体弯曲跟着还要转的角度走，约 0.7 秒跟上，停顿时慢慢回直
+    const bend = greeting ? 0 : Math.max(-1, Math.min(1, diff / 0.8));
+    c.bend += (bend - c.bend) * Math.min(1, dt * 1.5);
 
     // 摆尾/搏动频率固定在自然区间，不随游速放大
     c.phase += dt * c.beat;
